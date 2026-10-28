@@ -14,7 +14,7 @@
 
 // ------------------------------------------------------------------ config
 // WiFi: 0 = normal WPA/WPA2 home WiFi, 1 = eduroam (WPA2-Enterprise / EAP)
-#define USE_EDUROAM 0
+#define USE_EDUROAM 1
 
 // eduroam / UCL credentials (used when USE_EDUROAM is 1).
 // Phase-1 (outer) and phase-2 (inner) identity are both set to this user,
@@ -25,10 +25,10 @@
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASS "YOUR_WIFI_PASSWORD"
 
-#include <string.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <string.h>
 #if USE_EDUROAM
 #include "esp_eap_client.h"
 #endif
@@ -38,30 +38,30 @@
 const char* SERVER = "http://192.168.1.50:3001";
 
 // Pin map — adjust to your wiring.
-const int PIN_TEMP_ADC     = 34;  // thermistor divider
-const int PIN_PH_ADC       = 35;  // pH probe conditioning board
-const int PIN_RPM_SENSOR   = 32;  // IR reflective sensor (digital)
-const int PIN_HEATER       = 26;  // heater relay / MOSFET (3 Ohm, 30 W)
-const int PIN_PUMP_ACID    = 27;  // acid peristaltic pump
-const int PIN_PUMP_ALKALI  = 14;  // alkali peristaltic pump
-const int PIN_STIRRER_PWM  = 25;  // stirring motor (PWM)
+const int PIN_TEMP_ADC = 34;     // thermistor divider
+const int PIN_PH_ADC = 35;       // pH probe conditioning board
+const int PIN_RPM_SENSOR = 32;   // IR reflective sensor (digital)
+const int PIN_HEATER = 26;       // heater relay / MOSFET (3 Ohm, 30 W)
+const int PIN_PUMP_ACID = 27;    // acid peristaltic pump
+const int PIN_PUMP_ALKALI = 14;  // alkali peristaltic pump
+const int PIN_STIRRER_PWM = 25;  // stirring motor (PWM)
 
 // Thermistor (10 kOhm NTC, beta model).
-const float R_REF  = 10000.0f;   // series resistor (ohms)
-const float R_NOM  = 10000.0f;   // thermistor resistance at 25 C
-const float B_COEF = 3950.0f;    // beta coefficient
-const float T_NOM  = 298.15f;    // 25 C in Kelvin
+const float R_REF = 10000.0f;  // series resistor (ohms)
+const float R_NOM = 10000.0f;  // thermistor resistance at 25 C
+const float B_COEF = 3950.0f;  // beta coefficient
+const float T_NOM = 298.15f;   // 25 C in Kelvin
 
 // pH calibration — CALIBRATE WITH BUFFER SOLUTIONS.
 // pH = PH_SLOPE * probeVoltage + PH_OFFSET
-const float PH_SLOPE  = -5.70f;
+const float PH_SLOPE = -5.70f;
 const float PH_OFFSET = 21.34f;
 
 // Control setpoints (overwritten by the server, defaults match the spec).
 float setpointTemp = 30.0f;
-float setpointPh   = 5.0f;
-float setpointRpm  = 1000.0f;
-String mode        = "auto";   // "auto" or "manual"
+float setpointPh = 5.0f;
+float setpointRpm = 1000.0f;
+String mode = "auto";  // "auto" or "manual"
 
 // Actuator states.
 bool heater = false;
@@ -75,14 +75,12 @@ unsigned long lastRpmMillis = 0;
 float measuredRpm = 0.0f;
 
 // Timing.
-const unsigned long INGEST_MS   = 1000;  // upload a reading every 1 s
-const unsigned long COMMAND_MS  = 3000;
-unsigned long lastIngest  = 0;
+const unsigned long INGEST_MS = 1000;  // upload a reading every 1 s
+const unsigned long COMMAND_MS = 3000;
+unsigned long lastIngest = 0;
 unsigned long lastCommand = 0;
 
-void IRAM_ATTR rpmISR() {
-  pulseCount++;
-}
+void IRAM_ATTR rpmISR() { pulseCount++; }
 
 // ------------------------------------------------------------------ sensors
 float readTemperatureC() {
@@ -111,9 +109,18 @@ float readRPM() {
 }
 
 // ------------------------------------------------------------------ control
-void setHeater(bool on)  { heater = on;  digitalWrite(PIN_HEATER, on ? HIGH : LOW); }
-void setAcid(bool on)    { pumpAcid = on;  digitalWrite(PIN_PUMP_ACID, on ? HIGH : LOW); }
-void setAlkali(bool on)  { pumpAlkali = on; digitalWrite(PIN_PUMP_ALKALI, on ? HIGH : LOW); }
+void setHeater(bool on) {
+  heater = on;
+  digitalWrite(PIN_HEATER, on ? HIGH : LOW);
+}
+void setAcid(bool on) {
+  pumpAcid = on;
+  digitalWrite(PIN_PUMP_ACID, on ? HIGH : LOW);
+}
+void setAlkali(bool on) {
+  pumpAlkali = on;
+  digitalWrite(PIN_PUMP_ALKALI, on ? HIGH : LOW);
+}
 
 void setStirrerPWM(float rpmTarget) {
   // Open-loop proportional map 500..1500 RPM -> PWM duty (tune to your motor).
@@ -121,7 +128,8 @@ void setStirrerPWM(float rpmTarget) {
     ledcWrite(0, 0);
     return;
   }
-  int duty = (int)constrain(map(rpmTarget, 500.0f, 1500.0f, 90.0f, 255.0f), 0, 255);
+  int duty =
+      (int)constrain(map(rpmTarget, 500.0f, 1500.0f, 90.0f, 255.0f), 0, 255);
   ledcWrite(0, duty);
 }
 
@@ -132,12 +140,21 @@ void controlLoop() {
 
   if (mode == "auto") {
     // Hysteresis (temperature: +/- 0.25 C, pH: +/- 0.1).
-    if (temp < setpointTemp - 0.25f) setHeater(true);
-    else if (temp > setpointTemp + 0.25f) setHeater(false);
+    if (temp < setpointTemp - 0.25f)
+      setHeater(true);
+    else if (temp > setpointTemp + 0.25f)
+      setHeater(false);
 
-    if (ph > setpointPh + 0.1f) { setAcid(true);  setAlkali(false); }
-    else if (ph < setpointPh - 0.1f) { setAlkali(true); setAcid(false); }
-    else { setAcid(false); setAlkali(false); }
+    if (ph > setpointPh + 0.1f) {
+      setAcid(true);
+      setAlkali(false);
+    } else if (ph < setpointPh - 0.1f) {
+      setAlkali(true);
+      setAcid(false);
+    } else {
+      setAcid(false);
+      setAlkali(false);
+    }
 
     stirrer = true;
   }
@@ -183,16 +200,16 @@ void applyCommands(JsonArray commands) {
     JsonObject p = cmd["payload"].as<JsonObject>();
     if (String(type) == "setpoints") {
       if (p["temp"].is<float>()) setpointTemp = p["temp"].as<float>();
-      if (p["ph"].is<float>())   setpointPh   = p["ph"].as<float>();
-      if (p["rpm"].is<float>())  setpointRpm  = p["rpm"].as<float>();
+      if (p["ph"].is<float>()) setpointPh = p["ph"].as<float>();
+      if (p["rpm"].is<float>()) setpointRpm = p["rpm"].as<float>();
       if (p["mode"].is<const char*>()) mode = p["mode"].as<const char*>();
       Serial.printf("[cmd] setpoints %.1f C / pH %.1f / %.0f RPM / %s\n",
                     setpointTemp, setpointPh, setpointRpm, mode.c_str());
     } else if (String(type) == "control") {
-      if (p["heater"].is<bool>())      setHeater(p["heater"].as<bool>());
-      if (p["pump_acid"].is<bool>())   setAcid(p["pump_acid"].as<bool>());
+      if (p["heater"].is<bool>()) setHeater(p["heater"].as<bool>());
+      if (p["pump_acid"].is<bool>()) setAcid(p["pump_acid"].as<bool>());
       if (p["pump_alkali"].is<bool>()) setAlkali(p["pump_alkali"].as<bool>());
-      if (p["stirrer"].is<bool>())     stirrer = p["stirrer"].as<bool>();
+      if (p["stirrer"].is<bool>()) stirrer = p["stirrer"].as<bool>();
       Serial.println("[cmd] actuator override applied");
     }
   }
@@ -263,7 +280,7 @@ void setup() {
   digitalWrite(PIN_PUMP_ACID, LOW);
   digitalWrite(PIN_PUMP_ALKALI, LOW);
 
-  ledcSetup(0, 5000, 8);   // PWM channel 0, 5 kHz, 8-bit
+  ledcSetup(0, 5000, 8);  // PWM channel 0, 5 kHz, 8-bit
   ledcAttachPin(PIN_STIRRER_PWM, 0);
   attachInterrupt(digitalPinToInterrupt(PIN_RPM_SENSOR), rpmISR, FALLING);
 
