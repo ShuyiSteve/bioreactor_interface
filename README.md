@@ -117,20 +117,55 @@ npm run reset-db    # deletes the .db file; recreated + re-seeded on next start
 | `POST` | `/api/commands/ack` | `{ ids: [...] }` acknowledge commands |
 | `GET` | `/api/health` | Liveness check |
 
-### Data flow
+### Data flow — how the two ESP32s' data is received
 
-Two equivalent paths are supported:
+The two boards split the work: the **Nano ESP32** handles the hardware, the
+**DevKitC** handles the network. They pass data between themselves over **UART**
+as line-delimited JSON, and the DevKitC then moves it over **MQTT**.
 
-**MQTT (recommended, per the Connectivity spec).** The DevKitC bridge publishes
-each sample to `bioreactor/<device>/telemetry` and subscribes to
-`bioreactor/<device>/commands`. The server mirrors this: it subscribes to
-`bioreactor/+/telemetry`, writes the JSON into SQLite, and publishes operator
-commands to `bioreactor/<device>/commands`.
+**Uplink — sensor data → SQLite → dashboard**
 
-**HTTP (fallback / single-board).** A board can `POST` a reading to `/api/ingest`
-and either read the returned commands or poll `/api/commands/pending`. The
-payload is the same JSON:
-`{"temperature":29.5,"ph":5.1,"rpm":1002,"heater":1,"pump_acid":0,"pump_alkali":0,"stirrer":1}`
+1. The Nano reads the sensors (thermistor, pH probe, IR RPM sensor) and runs the
+   control loop.
+2. Every second it writes one JSON line to `Serial1` (UART):
+   ```json
+   {"temperature":29.5,"ph":5.1,"rpm":1002,"heater":1,"pump_acid":0,"pump_alkali":0,"stirrer":1}
+   ```
+3. The DevKitC reads that line from `Serial2` and publishes it to MQTT topic
+   `bioreactor/<device>/telemetry` (default `bioreactor/bio1/telemetry`).
+4. The server (`backend/mqtt.js`) is subscribed to `bioreactor/+/telemetry`, so
+   the broker delivers the message to it. It parses the JSON and inserts one row
+   into the SQLite `readings` table.
+5. The dashboard polls `GET /api/status` (and `/api/readings`) and renders the
+   values, so they appear within a couple of seconds of being sensed.
+
+**Downlink — dashboard commands → Nano**
+
+1. The operator changes a setpoint or toggles an actuator in the dashboard.
+2. The dashboard `POST`s to `/api/setpoints` or `/api/control`.
+3. The server updates SQLite, queues a command, and publishes JSON to
+   `bioreactor/<device>/commands`:
+   ```json
+   {"type":"setpoints","payload":{"temp":32,"ph":5.5,"rpm":1150,"mode":"auto"}}
+   ```
+4. The DevKitC is subscribed to `bioreactor/<device>/commands`, receives the
+   message, and forwards the raw JSON line over UART to the Nano.
+5. The Nano parses it and applies the new setpoint / actuator state.
+
+**MQTT topics**
+
+| Direction | Topic | Publisher → Subscriber |
+| --- | --- | --- |
+| Uplink | `bioreactor/<device>/telemetry` | DevKitC → server |
+| Downlink | `bioreactor/<device>/commands` | server → DevKitC |
+
+`<device>` defaults to `bio1` on both sides and must match
+(`MQTT_DEVICE_ID` on the server, `DEVICE_ID` in the firmware).
+
+**HTTP fallback (single-board).** As an alternative, one ESP32 can `POST` a
+reading directly to `/api/ingest` and read commands from the response or from
+`/api/commands/pending`. The JSON payload is identical to the telemetry line
+above.
 
 ## SQLite schema
 
