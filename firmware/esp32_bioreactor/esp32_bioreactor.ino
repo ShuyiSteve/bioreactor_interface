@@ -180,8 +180,16 @@ void connectWiFi() {
   }
   Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("Connected: %s\n", WiFi.localIP().toString().c_str());
+    Serial.println();
+    Serial.println("============================================");
+    Serial.println("  WiFi connected successfully!");
+    Serial.print("  SSID      : ");
+    Serial.println(WiFi.SSID());
+    Serial.print("  IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("============================================");
   } else {
+    Serial.println();
     Serial.println("WiFi connection failed.");
   }
 }
