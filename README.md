@@ -5,23 +5,28 @@ testbed described in *"Challenge 2: Connected Bioreactor Design Specification"*.
 It monitors and controls the three subsystems — **temperature**, **pH** and
 **stirring speed** — and logs every sample to SQLite.
 
-The firmware talks to the server over WiFi via an **ESP32** (programmed with the
-Arduino IDE). The dashboard sends setpoints and actuator commands back down the
-same channel, so the loop is fully two-way.
+Following the *Connectivity* specification, two ESP32-family boards are used:
+a **Nano ESP32** runs the local control loop next to the hardware, and an
+**ESP32 DevKitC** bridges it to the network. They are linked over **UART**, and
+the bridge talks to the server over **WiFi using MQTT** (publish/subscribe). An
+HTTP ingest path is also provided as a fallback.
 
 ```
-                     +----------------+   HTTP /api/ingest   +-----------------+
- [thermistor] -----> |                | -------------------> |                 |
- [pH probe] -------> |      ESP32     |                      |  Node.js server |
- [IR sensor] ------> |   (Arduino)    | <------------------- |  Express + API  |
-                     |                |   commands (JSON)    |                 |
- [heater/pumps] <--- |                |                      |  SQLite (WAL)   |
- [stirrer motor] <-- |                |                      +--------+--------+
-                     +----------------+                               |
-                                                               +------v------+
-                                                               |  Dashboard  |
-                                                               |  (React)    |
-                                                               +-------------+
+  Nano ESP32 (controller)        DevKitC (bridge)          MQTT broker
+ +--------------------+  UART   +-----------------+   publish / subscribe
+ | temp / pH / RPM    | ------> | WiFi + MQTT     | <--------------------+
+ | heater/pumps/motor | <------ | JSON lines      |                      |
+ +--------------------+         +-----------------+                      |
+                                                                         v
+                                                              +-------------------+
+                                                              |  Node.js server   |
+                                                              |  Express + SQLite |
+                                                              +---------+---------+
+                                                                        |
+                                                               +--------v--------+
+                                                               |    Dashboard    |
+                                                               |     (React)     |
+                                                               +-----------------+
 ```
 
 ## What's in this repo
@@ -32,7 +37,10 @@ same channel, so the loop is fully two-way.
 | `backend/db.js` | SQLite schema and data-access layer (`node:sqlite`) |
 | `backend/seed.js` | Seeds realistic demo history; `--reset` wipes the DB |
 | `frontend/` | React + TypeScript + Vite dashboard |
-| `firmware/esp32_bioreactor/` | ESP32/Arduino sketch (sensors, control loop, WiFi) |
+| `backend/mqtt.js` | Optional MQTT bridge (telemetry in, commands out) |
+| `firmware/nano_controller/` | Nano ESP32: sensors, actuators, control loop, UART |
+| `firmware/devkit_bridge/` | DevKitC: UART ↔ WiFi/MQTT bridge |
+| `firmware/esp32_bioreactor/` | Single-board HTTP alternative (no MQTT) |
 
 ## Control ranges (from the specification)
 
@@ -80,6 +88,9 @@ Backend environment variables:
 | `DB_PATH` | `backend/bioreactor.db` | SQLite file location |
 | `SIMULATE` | `true` | Set `false` to disable the live simulator |
 | `SEED` | `true` | Seed demo history when the DB is empty |
+| `MQTT_URL` | *(unset)* | MQTT broker, e.g. `mqtt://broker.hivemq.com:1883` |
+| `MQTT_TOPIC` | `bioreactor` | MQTT topic prefix |
+| `MQTT_DEVICE_ID` | `bio1` | Device id used for outgoing MQTT commands |
 
 ```bash
 PORT=3001 SIMULATE=false npm start
@@ -106,14 +117,20 @@ npm run reset-db    # deletes the .db file; recreated + re-seeded on next start
 | `POST` | `/api/commands/ack` | `{ ids: [...] }` acknowledge commands |
 | `GET` | `/api/health` | Liveness check |
 
-### ESP32 data flow
+### Data flow
 
-1. Every 2 s the ESP32 `POST`s a reading to `/api/ingest`:
-   `{"temperature":29.5,"ph":5.1,"rpm":1002,"heater":1,"pump_acid":0,"pump_alkali":0,"stirrer":1}`
-2. The server stores it in SQLite and replies with any queued commands.
-3. The ESP32 also polls `/api/commands/pending` every 3 s and applies
-   `setpoints` / `control` commands (then the dashboard updates its UI from
-   `/api/status`).
+Two equivalent paths are supported:
+
+**MQTT (recommended, per the Connectivity spec).** The DevKitC bridge publishes
+each sample to `bioreactor/<device>/telemetry` and subscribes to
+`bioreactor/<device>/commands`. The server mirrors this: it subscribes to
+`bioreactor/+/telemetry`, writes the JSON into SQLite, and publishes operator
+commands to `bioreactor/<device>/commands`.
+
+**HTTP (fallback / single-board).** A board can `POST` a reading to `/api/ingest`
+and either read the returned commands or poll `/api/commands/pending`. The
+payload is the same JSON:
+`{"temperature":29.5,"ph":5.1,"rpm":1002,"heater":1,"pump_acid":0,"pump_alkali":0,"stirrer":1}`
 
 ## SQLite schema
 
@@ -123,32 +140,45 @@ npm run reset-db    # deletes the .db file; recreated + re-seeded on next start
 - `commands` — outbound command queue for two-way communication
 - `events` — human-readable activity log
 
-## ESP32 wiring and firmware
+## Firmware and wiring (two boards)
 
-Open `firmware/esp32_bioreactor/esp32_bioreactor.ino` in the Arduino IDE, install
-the **ESP32** board package and the **ArduinoJson** library, then edit the config
-block at the top:
+Install in the Arduino IDE: the **esp32 by Espressif** board package, **PicoMQTT**
+and **ArduinoJson**.
 
-- `WIFI_SSID` / `WIFI_PASS`
-- `SERVER` — your computer's LAN IP, e.g. `http://192.168.1.50:3001` (**not** `localhost`)
-- pin map and pH calibration constants
+### 1. `firmware/nano_controller/nano_controller.ino` (Arduino Nano ESP32)
 
-Suggested pin map (change to match your board):
+Runs the control loop and talks to the hardware. Edit the pin map and pH
+calibration constants at the top.
 
 | Signal | Pin | Notes |
 | --- | --- | --- |
-| Thermistor divider | `34` | 10 kΩ NTC + 10 kΩ series resistor |
-| pH probe board | `35` | analog conditioning output |
-| IR reflective sensor | `32` | 2 pulses / revolution |
-| Heater relay | `26` | 3 Ω, 30 W element |
-| Acid pump | `27` | 6 V peristaltic pump |
-| Alkali pump | `14` | 6 V peristaltic pump |
-| Stirrer PWM | `25` | motor driver |
+| Thermistor divider | `A0` | 10 kΩ NTC + 10 kΩ series resistor |
+| pH probe board | `A1` | analog conditioning output |
+| IR reflective sensor | `2` | 2 pulses / revolution |
+| Heater relay | `3` | 3 Ω, 30 W element |
+| Acid pump | `4` | 6 V peristaltic pump |
+| Alkali pump | `5` | 6 V peristaltic pump |
+| Stirrer PWM | `6` | motor driver |
 
-> The specification describes an **Arduino Uno bridged to the ESP32**. If you keep
-> that two-board layout, put the sensor/actuator code on the Uno and send compact
-> lines over UART to the ESP32, which forwards them to the server (see the comment
-> at the top of the sketch).
+### 2. `firmware/devkit_bridge/devkit_bridge.ino` (ESP32 DevKitC V4)
+
+Bridges UART to WiFi/MQTT. Edit `WIFI_SSID`, `WIFI_PASS`, `MQTT_BROKER`,
+`DEVICE_ID` and `TOPIC`. Public brokers from the spec: `broker.hivemq.com`,
+`test.mosquitto.org`, or `engf0001.cs.ucl.ac.uk` (UCL network only).
+
+**UART link between the boards** (crossed, 115200 baud, line-delimited JSON):
+
+| Nano ESP32 | DevKitC |
+| --- | --- |
+| TX `D1` | RX2 `GPIO16` |
+| RX `D0` | TX2 `GPIO17` |
+| GND | GND |
+
+### Single-board HTTP alternative
+
+`firmware/esp32_bioreactor/esp32_bioreactor.ino` does everything on one ESP32 and
+talks straight to the server over HTTP. Set `SERVER` to your computer's LAN IP
+(`http://192.168.1.50:3001`, **not** `localhost`) and ignore MQTT.
 
 ## Design notes
 

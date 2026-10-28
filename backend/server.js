@@ -8,6 +8,9 @@
 //   DB_PATH   SQLite file location (default backend/bioreactor.db)
 //   SIMULATE  "true" (default) to generate live demo data; "false" to disable
 //   SEED      "true" (default) to seed demo history if the DB is empty
+//   MQTT_URL      MQTT broker URL, e.g. "mqtt://broker.hivemq.com:1883" (disabled if unset)
+//   MQTT_TOPIC    MQTT topic prefix (default "bioreactor")
+//   MQTT_DEVICE_ID device id for outgoing MQTT commands (default "bio1")
 'use strict';
 
 process.env.NODE_NO_WARNINGS = process.env.NODE_NO_WARNINGS || '1';
@@ -17,6 +20,7 @@ const fs = require('node:fs');
 const express = require('express');
 const cors = require('cors');
 const db = require('./db');
+const mqttBridge = require('./mqtt');
 const { generateDemoData } = require('./seed');
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -106,6 +110,7 @@ app.post('/api/setpoints', (req, res) => {
   };
   db.updateSettings(next);
   db.enqueueCommand('setpoints', next);
+  mqttBridge.publishCommand('setpoints', next);
   db.logEvent(
     'info',
     `Setpoints → ${next.temp.toFixed(1)} °C · pH ${next.ph.toFixed(1)} · ${Math.round(next.rpm)} RPM · ${next.mode}`
@@ -125,6 +130,7 @@ app.post('/api/control', (req, res) => {
   };
   db.updateControlState(next);
   db.enqueueCommand('control', next);
+  mqttBridge.publishCommand('control', next);
   db.logEvent(
     'info',
     `Manual control → heater ${next.heater ? 'ON' : 'OFF'} · acid ${next.pump_acid ? 'ON' : 'OFF'} · alkali ${next.pump_alkali ? 'ON' : 'OFF'} · stirrer ${next.stirrer ? 'ON' : 'OFF'}`
@@ -241,7 +247,28 @@ if (fs.existsSync(dist)) {
   });
 }
 
+// Optional MQTT ingress/egress (per the Connectivity spec).
+mqttBridge.start({
+  url: process.env.MQTT_URL || '',
+  topicPrefix: process.env.MQTT_TOPIC || 'bioreactor',
+  commandDeviceId: process.env.MQTT_DEVICE_ID || 'bio1',
+  onTelemetry: (_device, msg) => {
+    db.insertReading({
+      temperature: db.num(msg.temperature),
+      ph: db.num(msg.ph),
+      rpm: db.num(msg.rpm),
+      heater: msg.heater,
+      pump_acid: msg.pump_acid,
+      pump_alkali: msg.pump_alkali,
+      stirrer: msg.stirrer === undefined ? 1 : msg.stirrer,
+    });
+  },
+});
+
 app.listen(PORT, () => {
   console.log(`Bioreactor server listening on http://localhost:${PORT}`);
   console.log(`SQLite database: ${db.DB_PATH}`);
+  if (mqttBridge.isEnabled()) {
+    console.log(`MQTT bridge: ${process.env.MQTT_URL} (topic "${process.env.MQTT_TOPIC || 'bioreactor'}")`);
+  }
 });
