@@ -117,12 +117,12 @@ void setAlkali(bool on) {
 void setStirrerPWM(float rpmTarget) {
   // Open-loop proportional map 500..1500 RPM -> PWM duty (tune to your motor).
   if (!stirrer || rpmTarget <= 0) {
-    ledcWrite(0, 0);
+    ledcWrite(PIN_STIRRER_PWM, 0);
     return;
   }
   int duty =
       (int)constrain(map(rpmTarget, 500.0f, 1500.0f, 90.0f, 255.0f), 0, 255);
-  ledcWrite(0, duty);
+  ledcWrite(PIN_STIRRER_PWM, duty);
 }
 
 void controlLoop() {
@@ -280,8 +280,7 @@ void setup() {
   digitalWrite(PIN_PUMP_ACID, LOW);
   digitalWrite(PIN_PUMP_ALKALI, LOW);
 
-  ledcSetup(0, 5000, 8);  // PWM channel 0, 5 kHz, 8-bit
-  ledcAttachPin(PIN_STIRRER_PWM, 0);
+  ledcAttach(PIN_STIRRER_PWM, 5000, 8);  // PWM, 5 kHz, 8-bit
   attachInterrupt(digitalPinToInterrupt(PIN_RPM_SENSOR), rpmISR, FALLING);
 
   Serial.println("Bioreactor ESP32 booting…");
