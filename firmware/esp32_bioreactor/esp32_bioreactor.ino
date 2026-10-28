@@ -1,10 +1,37 @@
+/*
+ * Connected Bioreactor - ESP32 firmware (single-board, HTTP)
+ * ===========================================================
+ * Monitors temperature (10 kOhm NTC thermistor), pH (analog probe) and
+ * stirring speed (IR reflective sensor, 2 pulses/rev), runs the control loop,
+ * and exchanges data with the Node.js server over WiFi (HTTP).
+ *
+ * WiFi supports both normal WPA/WPA2 and eduroam (WPA2-Enterprise / EAP):
+ * set USE_EDUROAM to 1 below and fill in your UCL credentials.
+ *
+ * Required libraries: ArduinoJson (Benoit Blanchon)
+ * Board package: esp32 by Espressif Systems
+ */
+
+// ------------------------------------------------------------------ config
+// WiFi: 0 = normal WPA/WPA2 home WiFi, 1 = eduroam (WPA2-Enterprise / EAP)
+#define USE_EDUROAM 0
+
+// eduroam / UCL credentials (used when USE_EDUROAM is 1).
+// Phase-1 (outer) and phase-2 (inner) identity are both set to this user,
+// matching the UCL Moodle example. Change WIFI_USER to an anonymous identity
+// (e.g. "anonymous@ucl.ac.uk") if your campus requires it for the outer phase.
+#define WIFI_USER "XXXXXX@ucl.ac.uk"
+
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+
+#include <string.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-
-// ------------------------------------------------------------------ config
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+#if USE_EDUROAM
+#include "esp_eap_client.h"
+#endif
 
 // IP/port of the machine running `node backend/server.js`.
 // Use your computer's LAN IP (e.g. http://192.168.1.50:3001), NOT localhost.
@@ -121,18 +148,32 @@ void controlLoop() {
 // ------------------------------------------------------------------ network
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
-  Serial.printf("Connecting to %s", WIFI_SSID);
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
+
+#if USE_EDUROAM
+  Serial.printf("Connecting to eduroam as %s\n", WIFI_USER);
+  esp_eap_client_set_identity((uint8_t*)WIFI_USER, strlen(WIFI_USER));
+  esp_eap_client_set_username((uint8_t*)WIFI_USER, strlen(WIFI_USER));
+  esp_eap_client_set_password((uint8_t*)WIFI_PASS, strlen(WIFI_PASS));
+  esp_wifi_sta_enterprise_enable();
+  WiFi.begin(WIFI_SSID);
+#else
+  Serial.printf("Connecting to %s\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-    delay(250);
+#endif
+
+  // eduroam EAP handshakes can take longer than a home network.
+  unsigned long deadline = millis() + 20000;
+  while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+    delay(500);
     Serial.print('.');
   }
+  Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nConnected: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("Connected: %s\n", WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("\nWiFi connection failed.");
+    Serial.println("WiFi connection failed.");
   }
 }
 
