@@ -6,24 +6,16 @@
  * and exchanges data with the Node.js server over WiFi (HTTP).
  *
  * WiFi supports both normal WPA/WPA2 and eduroam (WPA2-Enterprise / EAP):
- * set USE_EDUROAM to 1 below and fill in your UCL credentials.
+ * set USE_EDUROAM in secret.h and fill in your UCL credentials there.
  *
  * Required libraries: ArduinoJson (Benoit Blanchon)
  * Board package: esp32 by Espressif Systems
  */
 
 // ------------------------------------------------------------------ config
-// WiFi: 0 = normal WPA/WPA2 home WiFi, 1 = eduroam (WPA2-Enterprise / EAP)
-#define USE_EDUROAM 1
-
-// eduroam / UCL credentials (used when USE_EDUROAM is 1).
-// Phase-1 (outer) and phase-2 (inner) identity are both set to this user,
-// matching the UCL Moodle example. Change WIFI_USER to an anonymous identity
-// (e.g. "anonymous@ucl.ac.uk") if your campus requires it for the outer phase.
-#define WIFI_USER "XXXXXX@ucl.ac.uk"
-
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+// WiFi credentials (SSID / password / eduroam user) live in `secret.h`, which
+// is gitignored so nobody accidentally commits their real credentials.
+#include "secret.h"
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
