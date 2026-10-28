@@ -1,0 +1,27 @@
+{
+  "name": "bioreactor_interface",
+  "version": "1.0.0",
+  "description": "Web UI, REST API and SQLite storage for the small-scale connected bioreactor (temperature, pH and stirring control).",
+  "main": "backend/server.js",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "backend": "node --disable-warning=ExperimentalWarning backend/server.js",
+    "frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "node --disable-warning=ExperimentalWarning backend/server.js",
+    "seed": "node backend/seed.js",
+    "reset-db": "node backend/seed.js --reset"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
