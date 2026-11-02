@@ -24,8 +24,9 @@
 #include <ArduinoJson.h>
 
 // ---------------------------------------------------------------- config
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+// WiFi credentials (SSID / password) live in `secret.h`, which is gitignored
+// so nobody accidentally commits their real credentials.
+#include "secret.h"
 
 // Public brokers suggested by the spec:
 //   broker.hivemq.com      (public, no auth)
@@ -60,9 +61,17 @@ void connectWiFi() {
     Serial.print('.');
   }
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nConnected: %s\n", WiFi.localIP().toString().c_str());
+    Serial.println();
+    Serial.println("============================================");
+    Serial.println("  WiFi connected successfully!");
+    Serial.print("  SSID      : ");
+    Serial.println(WiFi.SSID());
+    Serial.print("  IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("============================================");
   } else {
-    Serial.println("\nWiFi connection failed.");
+    Serial.println();
+    Serial.println("WiFi connection failed.");
   }
 }
 

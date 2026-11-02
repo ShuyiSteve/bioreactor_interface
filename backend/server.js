@@ -170,6 +170,9 @@ app.post('/api/commands/ack', (req, res) => {
 // Built-in simulator (demo mode)
 // ---------------------------------------------------------------------------
 
+const SIM_TICK_MS = 500;             // simulator update interval (0.5 s)
+const SIM_DT = SIM_TICK_MS / 2500;     // time-step scale: keeps dynamics the same at 1 s
+
 const sim = { temperature: 28.6, ph: 5.1, rpm: 1004, heater: 0 };
 
 function simulateTick() {
@@ -199,15 +202,15 @@ function simulateTick() {
 
   // Simple first-order plant model + noise.
   const heatTarget = heater ? s.temp + 0.8 : 18.5;
-  sim.temperature += (heatTarget - sim.temperature) * 0.06 + (Math.random() - 0.5) * 0.12;
+  sim.temperature += (heatTarget - sim.temperature) * 0.06 * SIM_DT + (Math.random() - 0.5) * 0.12 * Math.sqrt(SIM_DT);
 
-  if (acid) sim.ph -= 0.008;
-  if (alkali) sim.ph += 0.008;
-  sim.ph += (s.ph - sim.ph) * 0.02 + (Math.random() - 0.5) * 0.02;
+  if (acid) sim.ph -= 0.008 * SIM_DT;
+  if (alkali) sim.ph += 0.008 * SIM_DT;
+  sim.ph += (s.ph - sim.ph) * 0.02 * SIM_DT + (Math.random() - 0.5) * 0.02 * Math.sqrt(SIM_DT);
   sim.ph = Math.min(7.5, Math.max(2.5, sim.ph));
 
   const rpmTarget = stirrer ? s.rpm : 0;
-  sim.rpm += (rpmTarget - sim.rpm) * 0.15 + (Math.random() - 0.5) * 6;
+  sim.rpm += (rpmTarget - sim.rpm) * 0.15 * SIM_DT + (Math.random() - 0.5) * 6 * Math.sqrt(SIM_DT);
 
   db.insertReading({
     temperature: Math.round(sim.temperature * 100) / 100,
@@ -231,8 +234,8 @@ if (SEED && db.countReadings() === 0) {
 
 if (SIMULATE) {
   simulateTick();
-  setInterval(simulateTick, 2500);
-  console.log('Simulator enabled: generating live readings every 2.5s.');
+  setInterval(simulateTick, SIM_TICK_MS);
+  console.log(`Simulator enabled: generating live readings every ${SIM_TICK_MS / 1000}s.`);
 }
 
 // Serve the built frontend if it exists (production mode).

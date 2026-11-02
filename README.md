@@ -177,6 +177,11 @@ above.
 
 ## Firmware and wiring (two boards)
 
+> **Credentials:** WiFi SSID/password and eduroam credentials live in a
+> **gitignored `secret.h`** inside each firmware folder. Copy the committed
+> `secret.h.example` to `secret.h` and fill in your own values — this stops team
+> members from accidentally committing their passwords.
+
 Install in the Arduino IDE: the **esp32 by Espressif** board package, **PicoMQTT**
 and **ArduinoJson**.
 
