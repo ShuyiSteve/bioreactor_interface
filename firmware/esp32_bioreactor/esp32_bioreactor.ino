@@ -2,7 +2,7 @@
  * Connected Bioreactor - ESP32 firmware (single-board, HTTP)
  * ===========================================================
  * Monitors temperature (10 kOhm NTC thermistor), pH (analog probe) and
- * stirring speed (IR reflective sensor, 2 pulses/rev), runs the control loop,
+ * stirring speed (Hall sensor, 70 pulses/rev), runs the control loop,
  * and exchanges data with the Node.js server over WiFi (HTTP).
  *
  * WiFi supports both normal WPA/WPA2 and eduroam (WPA2-Enterprise / EAP):
@@ -32,7 +32,7 @@ const char* SERVER = "http://192.168.1.50:3001";
 // Pin map — adjust to your wiring.
 const int PIN_TEMP_ADC = 34;     // thermistor divider
 const int PIN_PH_ADC = 35;       // pH probe conditioning board
-const int PIN_RPM_SENSOR = 32;   // IR reflective sensor (digital)
+const int PIN_RPM_SENSOR = 32;   // Hall-effect sensor (70 pulses/rev)
 const int PIN_HEATER = 26;       // heater relay / MOSFET (3 Ohm, 30 W)
 const int PIN_PUMP_ACID = 27;    // acid peristaltic pump
 const int PIN_PUMP_ALKALI = 14;  // alkali peristaltic pump
@@ -93,8 +93,8 @@ float readRPM() {
   unsigned long now = millis();
   float elapsed = (now - lastRpmMillis) / 1000.0f;
   if (elapsed < 0.05f) return measuredRpm;
-  // 2 pulses per revolution.
-  measuredRpm = (pulseCount * 60.0f) / 2.0f / elapsed;
+  // 70 pulses per revolution (Hall sensor).
+  measuredRpm = (pulseCount * 60.0f) / 70.0f / elapsed;
   pulseCount = 0;
   lastRpmMillis = now;
   return measuredRpm;
@@ -199,17 +199,25 @@ void applyCommands(JsonArray commands) {
     const char* type = cmd["type"] | "";
     JsonObject p = cmd["payload"].as<JsonObject>();
     if (String(type) == "setpoints") {
-      if (p["temp"].is<float>()) setpointTemp = p["temp"].as<float>();
-      if (p["ph"].is<float>()) setpointPh = p["ph"].as<float>();
+      // New course key names first, legacy names as fallback.
+      if (p["temperature_C"].is<float>()) setpointTemp = p["temperature_C"].as<float>();
+      else if (p["temp"].is<float>()) setpointTemp = p["temp"].as<float>();
+      if (p["pH"].is<float>()) setpointPh = p["pH"].as<float>();
+      else if (p["ph"].is<float>()) setpointPh = p["ph"].as<float>();
       if (p["rpm"].is<float>()) setpointRpm = p["rpm"].as<float>();
       if (p["mode"].is<const char*>()) mode = p["mode"].as<const char*>();
       Serial.printf("[cmd] setpoints %.1f C / pH %.1f / %.0f RPM / %s\n",
                     setpointTemp, setpointPh, setpointRpm, mode.c_str());
     } else if (String(type) == "control") {
-      if (p["heater"].is<bool>()) setHeater(p["heater"].as<bool>());
-      if (p["pump_acid"].is<bool>()) setAcid(p["pump_acid"].as<bool>());
-      if (p["pump_alkali"].is<bool>()) setAlkali(p["pump_alkali"].as<bool>());
-      if (p["stirrer"].is<bool>()) stirrer = p["stirrer"].as<bool>();
+      // New duty keys (0..1) first, legacy booleans as fallback.
+      if (p["heater_pwm"].is<float>()) setHeater(p["heater_pwm"].as<float>() > 0.05f);
+      else if (p["heater"].is<bool>()) setHeater(p["heater"].as<bool>());
+      if (p["acid_pwm"].is<float>()) setAcid(p["acid_pwm"].as<float>() > 0.5f);
+      else if (p["pump_acid"].is<bool>()) setAcid(p["pump_acid"].as<bool>());
+      if (p["base_pwm"].is<float>()) setAlkali(p["base_pwm"].as<float>() > 0.5f);
+      else if (p["pump_alkali"].is<bool>()) setAlkali(p["pump_alkali"].as<bool>());
+      if (p["motor_pwm"].is<float>()) stirrer = p["motor_pwm"].as<float>() > 0.05f;
+      else if (p["stirrer"].is<bool>()) stirrer = p["stirrer"].as<bool>();
       Serial.println("[cmd] actuator override applied");
     }
   }

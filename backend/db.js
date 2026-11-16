@@ -22,13 +22,16 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS readings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          INTEGER NOT NULL,
+    seq         INTEGER,
+    device      TEXT,
     temperature REAL,
     ph          REAL,
     rpm         REAL,
     heater      INTEGER NOT NULL DEFAULT 0,
     pump_acid   INTEGER NOT NULL DEFAULT 0,
     pump_alkali INTEGER NOT NULL DEFAULT 0,
-    stirrer     INTEGER NOT NULL DEFAULT 0
+    stirrer     INTEGER NOT NULL DEFAULT 0,
+    raw         TEXT
   );
 
   CREATE INDEX IF NOT EXISTS idx_readings_ts ON readings (ts);
@@ -57,11 +60,13 @@ db.exec(`
   -- Outbound command queue for two-way communication with the ESP32.
   CREATE TABLE IF NOT EXISTS commands (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id   TEXT,
     type         TEXT NOT NULL,
     payload      TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'pending',
     created_at   INTEGER NOT NULL,
-    delivered_at INTEGER
+    delivered_at INTEGER,
+    applied      INTEGER
   );
 
   -- Human-readable activity log.
@@ -82,6 +87,19 @@ db.prepare(
   `INSERT OR IGNORE INTO control_state (id, heater, pump_acid, pump_alkali, stirrer, updated_at)
    VALUES (1, 0, 0, 0, 1, ?)`
 ).run(now);
+
+// Lightweight migration: add columns introduced after the DB was first created.
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn('readings', 'seq', 'seq INTEGER');
+ensureColumn('readings', 'device', 'device TEXT');
+ensureColumn('readings', 'raw', 'raw TEXT');
+ensureColumn('commands', 'command_id', 'command_id TEXT');
+ensureColumn('commands', 'applied', 'applied INTEGER');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -167,21 +185,27 @@ function insertReading({
   pump_alkali = 0,
   stirrer = 0,
   ts = Date.now(),
+  seq = null,
+  device = null,
+  raw = null,
 }) {
   const info = db
     .prepare(
-      `INSERT INTO readings (ts, temperature, ph, rpm, heater, pump_acid, pump_alkali, stirrer)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO readings (ts, seq, device, temperature, ph, rpm, heater, pump_acid, pump_alkali, stirrer, raw)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       ts,
+      seq === null ? null : Number(seq),
+      device === null ? null : String(device),
       num(temperature),
       num(ph),
       num(rpm),
       bool(heater),
       bool(pump_acid),
       bool(pump_alkali),
-      bool(stirrer)
+      bool(stirrer),
+      raw === null ? null : (typeof raw === 'string' ? raw : JSON.stringify(raw))
     );
   return Number(info.lastInsertRowid);
 }
@@ -214,11 +238,12 @@ function getSeries(param, rangeMs, points) {
 
 function getLog(limit) {
   const n = Math.min(1000, Math.max(1, Number(limit) || 100));
-  return db
+  const rows = db
     .prepare(
-      'SELECT ts, temperature, ph, rpm, heater, pump_acid, pump_alkali, stirrer FROM readings ORDER BY ts DESC, id DESC LIMIT ?'
+      'SELECT ts, seq, device, temperature, ph, rpm, heater, pump_acid, pump_alkali, stirrer, raw FROM readings ORDER BY ts DESC, id DESC LIMIT ?'
     )
     .all(n);
+  return rows.map((r) => ({ ...r, raw: r.raw ? safeParse(r.raw) : null }));
 }
 
 function downsample(rows, points) {
@@ -235,42 +260,51 @@ function downsample(rows, points) {
 // Commands (two-way communication queue)
 // ---------------------------------------------------------------------------
 
+const { randomUUID } = require('node:crypto');
+
 function enqueueCommand(type, payload) {
-  const info = db
-    .prepare(
-      'INSERT INTO commands (type, payload, status, created_at) VALUES (?, ?, ?, ?)'
-    )
-    .run(type, JSON.stringify(payload), 'pending', Date.now());
-  return Number(info.lastInsertRowid);
+  const commandId = randomUUID();
+  db.prepare(
+    'INSERT INTO commands (command_id, type, payload, status, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(commandId, type, JSON.stringify(payload), 'pending', Date.now());
+  return { id: commandId, type, payload };
 }
 
 function getPendingCommands(markSent = false) {
   const rows = db
-    .prepare("SELECT id, type, payload FROM commands WHERE status = 'pending' ORDER BY id ASC")
+    .prepare(
+      "SELECT command_id AS cid, type, payload FROM commands WHERE status = 'pending' ORDER BY id ASC"
+    )
     .all();
   if (markSent && rows.length) {
-    const ids = rows.map((r) => r.id);
+    const ids = rows.map((r) => r.cid);
     const placeholders = ids.map(() => '?').join(',');
     db.prepare(
-      `UPDATE commands SET status = 'sent', delivered_at = ? WHERE id IN (${placeholders})`
+      `UPDATE commands SET status = 'sent', delivered_at = ? WHERE command_id IN (${placeholders})`
     ).run(Date.now(), ...ids);
   }
   return rows.map((r) => ({
-    id: r.id,
+    id: r.cid,
     type: r.type,
     payload: safeParse(r.payload),
   }));
 }
 
+function ackCommand(commandId, ok) {
+  if (!commandId) return 0;
+  const info = db
+    .prepare(`UPDATE commands SET status = 'acked', applied = ? WHERE command_id = ?`)
+    .run(ok ? 1 : 0, String(commandId));
+  return Number(info.changes);
+}
+
 function ackCommands(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return 0;
-  const numeric = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0);
-  if (!numeric.length) return 0;
-  const placeholders = numeric.map(() => '?').join(',');
-  const info = db
-    .prepare(`UPDATE commands SET status = 'acked' WHERE id IN (${placeholders})`)
-    .run(...numeric);
-  return Number(info.changes);
+  let changed = 0;
+  for (const id of ids) {
+    if (id !== null && id !== undefined) changed += ackCommand(String(id), true);
+  }
+  return changed;
 }
 
 function safeParse(text) {
@@ -314,6 +348,7 @@ module.exports = {
   getLog,
   enqueueCommand,
   getPendingCommands,
+  ackCommand,
   ackCommands,
   logEvent,
   getEvents,

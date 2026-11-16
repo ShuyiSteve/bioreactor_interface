@@ -41,6 +41,7 @@ HTTP ingest path is also provided as a fallback.
 | `firmware/nano_controller/` | Nano ESP32: sensors, actuators, control loop, UART |
 | `firmware/devkit_bridge/` | DevKitC: UART ↔ WiFi/MQTT bridge |
 | `firmware/esp32_bioreactor/` | Single-board HTTP alternative (no MQTT) |
+| `firmware/ttgo_t_display/` | TTGO T-Display offline monitor (taps UART, no WiFi) |
 
 ## Control ranges (from the specification)
 
@@ -69,7 +70,7 @@ Open <http://localhost:5173>. The UI polls the API every few seconds.
 
 The backend starts in **simulation mode** by default, so the dashboard is live
 even without hardware: it generates readings and a hysteresis control loop every
-2.5 seconds. Point a real ESP32 at the server to replace the simulated data.
+0.5 seconds. Point a real ESP32 at the server to replace the simulated data.
 
 ### Production-style single server
 
@@ -125,32 +126,45 @@ as line-delimited JSON, and the DevKitC then moves it over **MQTT**.
 
 **Uplink — sensor data → SQLite → dashboard**
 
-1. The Nano reads the sensors (thermistor, pH probe, IR RPM sensor) and runs the
-   control loop.
-2. Every second it writes one JSON line to `Serial1` (UART):
+1. The Nano reads the sensors (thermistor, pH probe, RPM sensor) at 10 Hz and
+   runs the control loop (heater is PWM-capped at 60% duty).
+2. Every 1 s it aggregates the ~10 samples into `mean/min/max` and writes one
+   JSON line to `Serial1` (UART):
    ```json
-   {"temperature":29.5,"ph":5.1,"rpm":1002,"heater":1,"pump_acid":0,"pump_alkali":0,"stirrer":1}
+   {
+     "device": "bio1", "seq": 42,
+     "window": {"start": 123456, "end": 124456, "seconds": 1.0, "samples": 10},
+     "temperature_C": {"mean": 29.51, "min": 29.42, "max": 29.60},
+     "pH":            {"mean": 5.08,  "min": 5.05,  "max": 5.11},
+     "rpm":           {"mean": 1002,  "min": 996,   "max": 1008},
+     "actuators_avg": {"heater_pwm": 0.60, "motor_pwm": 0.70, "acid_pwm": 0.0, "base_pwm": 0.0},
+     "setpoints": {"temperature_C": 30.0, "pH": 5.0, "rpm": 1000},
+     "mode": "auto", "sp_source": "dashboard", "alarms": []
+   }
    ```
-3. The DevKitC reads that line from `Serial2` and publishes it to MQTT topic
-   `bioreactor/<device>/telemetry` (default `bioreactor/bio1/telemetry`).
-4. The server (`backend/mqtt.js`) is subscribed to `bioreactor/+/telemetry`, so
-   the broker delivers the message to it. It parses the JSON and inserts one row
-   into the SQLite `readings` table.
-5. The dashboard polls `GET /api/status` (and `/api/readings`) and renders the
-   values, so they appear within a couple of seconds of being sensed.
+3. The DevKitC reads the line from `Serial2`, adds the **unix timestamps from
+   NTP** (top-level `ts` plus absolute `window.start` / `window.end`), and
+   publishes it to `bioreactor/<device>/telemetry`.
+4. The server is subscribed to `bioreactor/+/telemetry`, parses it, and stores a
+   row in SQLite (the mean values feed the dashboard; the full JSON is kept in a
+   `raw` column for Data Analysis).
+5. The dashboard polls `GET /api/status` / `/api/readings` and renders the values.
 
-**Downlink — dashboard commands → Nano**
+**Downlink — dashboard commands → Nano → ack**
 
 1. The operator changes a setpoint or toggles an actuator in the dashboard.
-2. The dashboard `POST`s to `/api/setpoints` or `/api/control`.
-3. The server updates SQLite, queues a command, and publishes JSON to
+2. The dashboard `POST`s to `/api/setpoints` or `/api/control`; the server
+   translates to the course key names, adds an `id`, and publishes to
    `bioreactor/<device>/commands`:
    ```json
-   {"type":"setpoints","payload":{"temp":32,"ph":5.5,"rpm":1150,"mode":"auto"}}
+   {"id": "…uuid…", "type": "setpoints",
+    "payload": {"temperature_C": 32.0, "pH": 5.5, "rpm": 1150, "mode": "auto"}}
    ```
-4. The DevKitC is subscribed to `bioreactor/<device>/commands`, receives the
-   message, and forwards the raw JSON line over UART to the Nano.
-5. The Nano parses it and applies the new setpoint / actuator state.
+3. The DevKitC forwards the raw JSON over UART to the Nano.
+4. The Nano **range-checks** every setpoint (25–35 °C, 500–1500 RPM, pH 3–7),
+   applies them, and replies over UART with `{id, ok, applied}`.
+5. The DevKitC publishes that reply to `bioreactor/<device>/ack`; the server
+   marks the command acknowledged.
 
 **MQTT topics**
 
@@ -158,14 +172,24 @@ as line-delimited JSON, and the DevKitC then moves it over **MQTT**.
 | --- | --- | --- |
 | Uplink | `bioreactor/<device>/telemetry` | DevKitC → server |
 | Downlink | `bioreactor/<device>/commands` | server → DevKitC |
+| Ack | `bioreactor/<device>/ack` | DevKitC → server |
+| Status | `bioreactor/<device>/status` | DevKitC → server (`online` / `offline`) |
 
 `<device>` defaults to `bio1` on both sides and must match
 (`MQTT_DEVICE_ID` on the server, `DEVICE_ID` in the firmware).
 
+**Presence (item 4) & link-drop buffering (item 6).** The bridge sets the
+`status` topic as its MQTT **last will** (`"offline"`, retained) and publishes
+`"online"` the moment it connects. If the WiFi/MQTT link drops mid-run, the
+broker publishes `"offline"` on the bridge's behalf, so the dashboard flips to
+"Device offline" even without a clean shutdown. While disconnected the bridge
+buffers up to 120 telemetry samples (~2 min) and, on reconnect, publishes
+`"online"` again and flushes the buffer with the original `seq` numbers so no
+sample is lost.
+
 **HTTP fallback (single-board).** As an alternative, one ESP32 can `POST` a
-reading directly to `/api/ingest` and read commands from the response or from
-`/api/commands/pending`. The JSON payload is identical to the telemetry line
-above.
+reading directly to `/api/ingest` (same telemetry JSON) and read commands from
+the response or `/api/commands/pending`.
 
 ## SQLite schema
 
@@ -194,7 +218,7 @@ calibration constants at the top.
 | --- | --- | --- |
 | Thermistor divider | `A0` | 10 kΩ NTC + 10 kΩ series resistor |
 | pH probe board | `A1` | analog conditioning output |
-| IR reflective sensor | `2` | 2 pulses / revolution |
+| Hall-effect sensor | `2` | 70 pulses / revolution |
 | Heater relay | `3` | 3 Ω, 30 W element |
 | Acid pump | `4` | 6 V peristaltic pump |
 | Alkali pump | `5` | 6 V peristaltic pump |
@@ -223,8 +247,11 @@ talks straight to the server over HTTP. Set `SERVER` to your computer's LAN IP
 ## Design notes
 
 - **Auto mode**: the on-device (or simulated) hysteresis controller holds each
-  parameter at its setpoint. The dashboard shows the live deviation against the
-  tolerance band (green = in spec, amber = out of spec).
+  parameter at its setpoint. Stirring is closed-loop: a Hall-effect sensor
+  (70 pulses/rev) measures RPM and a **PI controller** drives the motor PWM to
+  track the speed setpoint (instead of mapping the setpoint straight to PWM).
+  The dashboard shows the live deviation against the tolerance band (green = in
+  spec, amber = out of spec).
 - **Manual mode**: operator toggles the heater, acid/alkali pumps and stirrer
   directly; commands are queued and delivered to the device.
 - Charts shade the tolerance band around the setpoint line so it is easy to see

@@ -27,6 +27,28 @@ const PORT = Number(process.env.PORT) || 3001;
 const SIMULATE = String(process.env.SIMULATE ?? 'true') !== 'false';
 const SEED = String(process.env.SEED ?? 'true') !== 'false';
 const ONLINE_WINDOW_MS = 15000;
+const MQTT_DEVICE_ID = process.env.MQTT_DEVICE_ID || 'bio1';
+
+// Device presence from the MQTT status topic (item 4): the DevKitC publishes
+// "online" on connect and the broker publishes "offline" via its last will when
+// the link drops. Keyed by device id (usually "bio1").
+const deviceStatus = new Map(); // device -> { status: 'online'|'offline', at: ms }
+
+function markDeviceOnline(device) {
+  deviceStatus.set(String(device), { status: 'online', at: Date.now() });
+}
+
+function setDeviceStatus(device, statusText) {
+  const status = String(statusText || '').trim().toLowerCase();
+  if (status !== 'online' && status !== 'offline') return;
+  const key = String(device);
+  const previous = deviceStatus.get(key);
+  deviceStatus.set(key, { status, at: Date.now() });
+  if (!previous || previous.status !== status) {
+    db.logEvent('info', `Device ${key} is ${status}`);
+    console.log(`[mqtt] ${key} -> ${status}`);
+  }
+}
 
 const app = express();
 app.use(cors());
@@ -49,7 +71,12 @@ function buildStatus() {
   const setpoints = db.getSettings();
   const control = db.getControlState();
   const lastSeen = latest ? latest.ts : 0;
-  const online = Date.now() - lastSeen < ONLINE_WINDOW_MS;
+  const st = deviceStatus.get(MQTT_DEVICE_ID);
+  // Item 4: the MQTT status topic is authoritative when we have it; otherwise
+  // fall back to "recent reading" so simulation/HTTP mode still works.
+  const online = st
+    ? st.status === 'online'
+    : Date.now() - lastSeen < ONLINE_WINDOW_MS;
   return {
     device: {
       online,
@@ -59,6 +86,63 @@ function buildStatus() {
     setpoints,
     control,
   };
+}
+
+function meanOf(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return v;
+  return db.num(v.mean, null);
+}
+
+// Accepts BOTH the course telemetry shape (mean/min/max + actuators_avg) and
+// the legacy flat shape, and stores a single row per sample.
+function storeTelemetry(msg) {
+  if (!msg) return null;
+  const isNew =
+    msg.temperature_C !== undefined ||
+    (msg.pH && msg.pH.mean !== undefined) ||
+    (msg.rpm && msg.rpm.mean !== undefined);
+
+  let temperature, ph, rpm, heater, acid, alkali, stirrer;
+  let seq = null, device = null, ts = Date.now();
+
+  if (isNew) {
+    temperature = meanOf(msg.temperature_C);
+    ph = meanOf(msg.pH);
+    rpm = meanOf(msg.rpm);
+    const act = msg.actuators_avg || {};
+    heater = db.num(act.heater_pwm, 0) > 0.05 ? 1 : 0;
+    acid = db.num(act.acid_pwm, 0) > 0.05 ? 1 : 0;
+    alkali = db.num(act.base_pwm, 0) > 0.05 ? 1 : 0;
+    stirrer = db.num(act.motor_pwm, 0) > 0.05 ? 1 : 0;
+    seq = msg.seq === undefined ? null : Number(msg.seq);
+    device = msg.device === undefined ? null : String(msg.device);
+    ts = db.num(msg.ts, Date.now());
+  } else {
+    temperature = db.num(msg.temperature);
+    ph = db.num(msg.ph);
+    rpm = db.num(msg.rpm);
+    heater = msg.heater ? 1 : 0;
+    acid = msg.pump_acid ? 1 : 0;
+    alkali = msg.pump_alkali ? 1 : 0;
+    stirrer = msg.stirrer === undefined ? 1 : msg.stirrer ? 1 : 0;
+    device = msg.device === undefined ? null : String(msg.device);
+    ts = db.num(msg.ts, Date.now());
+  }
+
+  return db.insertReading({
+    ts,
+    seq,
+    device,
+    temperature,
+    ph,
+    rpm,
+    heater,
+    pump_acid: acid,
+    pump_alkali: alkali,
+    stirrer,
+    raw: msg,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +193,9 @@ app.post('/api/setpoints', (req, res) => {
     mode: body.mode === 'manual' || body.mode === 'auto' ? body.mode : cur.mode,
   };
   db.updateSettings(next);
-  db.enqueueCommand('setpoints', next);
-  mqttBridge.publishCommand('setpoints', next);
+  const setpointPayload = { temperature_C: next.temp, pH: next.ph, rpm: next.rpm, mode: next.mode };
+  const setpointCmd = db.enqueueCommand('setpoints', setpointPayload);
+  mqttBridge.publishCommand(setpointCmd.id, 'setpoints', setpointPayload);
   db.logEvent(
     'info',
     `Setpoints → ${next.temp.toFixed(1)} °C · pH ${next.ph.toFixed(1)} · ${Math.round(next.rpm)} RPM · ${next.mode}`
@@ -129,8 +214,14 @@ app.post('/api/control', (req, res) => {
     stirrer: db.bool(body.stirrer, cur.stirrer),
   };
   db.updateControlState(next);
-  db.enqueueCommand('control', next);
-  mqttBridge.publishCommand('control', next);
+  const controlPayload = {
+    heater_pwm: next.heater ? 0.6 : 0.0,   // 60% safety cap (30 W heater)
+    motor_pwm: next.stirrer ? 1.0 : 0.0,
+    acid_pwm: next.pump_acid ? 1.0 : 0.0,
+    base_pwm: next.pump_alkali ? 1.0 : 0.0,
+  };
+  const controlCmd = db.enqueueCommand('control', controlPayload);
+  mqttBridge.publishCommand(controlCmd.id, 'control', controlPayload);
   db.logEvent(
     'info',
     `Manual control → heater ${next.heater ? 'ON' : 'OFF'} · acid ${next.pump_acid ? 'ON' : 'OFF'} · alkali ${next.pump_alkali ? 'ON' : 'OFF'} · stirrer ${next.stirrer ? 'ON' : 'OFF'}`
@@ -140,16 +231,7 @@ app.post('/api/control', (req, res) => {
 
 // ESP32 pushes a reading here and receives any pending commands in the response.
 app.post('/api/ingest', (req, res) => {
-  const b = req.body || {};
-  db.insertReading({
-    temperature: db.num(b.temperature),
-    ph: db.num(b.ph),
-    rpm: db.num(b.rpm),
-    heater: b.heater,
-    pump_acid: b.pump_acid,
-    pump_alkali: b.pump_alkali,
-    stirrer: b.stirrer === undefined ? 1 : b.stirrer,
-  });
+  storeTelemetry(req.body || {});
   const commands = db.getPendingCommands(true);
   res.json({ ok: true, commands });
 });
@@ -172,54 +254,72 @@ app.post('/api/commands/ack', (req, res) => {
 
 const SIM_TICK_MS = 500;             // simulator update interval (0.5 s)
 const SIM_DT = SIM_TICK_MS / 2500;     // time-step scale: keeps dynamics the same at 1 s
+const SIM_SAMPLES = 10;                // simulated samples per telemetry window
 
-const sim = { temperature: 28.6, ph: 5.1, rpm: 1004, heater: 0 };
+const sim = { temperature: 28.6, ph: 5.1, rpm: 1004 };
+let simSeq = 0;
 
 function simulateTick() {
   const s = db.getSettings();
   const c = db.getControlState();
   const auto = s.mode === 'auto';
 
-  let heater = c.heater;
-  let acid = c.pump_acid;
-  let alkali = c.pump_alkali;
-  let stirrer = c.stirrer;
+  let heaterOn = !!c.heater;
+  let acidOn = !!c.pump_acid;
+  let alkaliOn = !!c.pump_alkali;
+  let stirrerOn = !!c.stirrer;
 
   if (auto) {
-    // Hysteresis controller (the real logic would run on the ESP32).
-    if (sim.temperature < s.temp - 0.25) heater = 1;
-    else if (sim.temperature > s.temp + 0.25) heater = 0;
-    acid = sim.ph > s.ph + 0.1 ? 1 : 0;
-    alkali = sim.ph < s.ph - 0.1 ? 1 : 0;
-    stirrer = 1;
+    // Hysteresis controller (the real logic runs on the ESP32).
+    if (sim.temperature < s.temp - 0.25) heaterOn = true;
+    else if (sim.temperature > s.temp + 0.25) heaterOn = false;
+    acidOn = sim.ph > s.ph + 0.1;
+    alkaliOn = sim.ph < s.ph - 0.1;
+    stirrerOn = true;
     db.updateControlState({
-      heater,
-      pump_acid: acid,
-      pump_alkali: alkali,
-      stirrer,
+      heater: heaterOn ? 1 : 0,
+      pump_acid: acidOn ? 1 : 0,
+      pump_alkali: alkaliOn ? 1 : 0,
+      stirrer: stirrerOn ? 1 : 0,
     });
   }
 
   // Simple first-order plant model + noise.
-  const heatTarget = heater ? s.temp + 0.8 : 18.5;
+  const heatTarget = heaterOn ? s.temp + 0.8 : 18.5;
   sim.temperature += (heatTarget - sim.temperature) * 0.06 * SIM_DT + (Math.random() - 0.5) * 0.12 * Math.sqrt(SIM_DT);
 
-  if (acid) sim.ph -= 0.008 * SIM_DT;
-  if (alkali) sim.ph += 0.008 * SIM_DT;
+  if (acidOn) sim.ph -= 0.008 * SIM_DT;
+  if (alkaliOn) sim.ph += 0.008 * SIM_DT;
   sim.ph += (s.ph - sim.ph) * 0.02 * SIM_DT + (Math.random() - 0.5) * 0.02 * Math.sqrt(SIM_DT);
   sim.ph = Math.min(7.5, Math.max(2.5, sim.ph));
 
-  const rpmTarget = stirrer ? s.rpm : 0;
+  const rpmTarget = stirrerOn ? s.rpm : 0;
   sim.rpm += (rpmTarget - sim.rpm) * 0.15 * SIM_DT + (Math.random() - 0.5) * 6 * Math.sqrt(SIM_DT);
 
-  db.insertReading({
-    temperature: Math.round(sim.temperature * 100) / 100,
-    ph: Math.round(sim.ph * 100) / 100,
-    rpm: Math.max(0, Math.round(sim.rpm)),
-    heater,
-    pump_acid: acid,
-    pump_alkali: alkali,
-    stirrer,
+  // Actuator duties (0..1). Heater is PWM-capped at 60% (item 1).
+  const heaterDuty = heaterOn ? 0.6 : 0.0;
+  const motorDuty = stirrerOn ? db.clamp((s.rpm - 400) / 1100, 0, 1, 0.5) : 0.0;
+  const acidDuty = acidOn ? 1.0 : 0.0;
+  const baseDuty = alkaliOn ? 1.0 : 0.0;
+
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const now = Date.now();
+
+  // Emit the SAME course telemetry shape the Nano sends, so Data Analysis
+  // works identically on simulated and real data.
+  storeTelemetry({
+    device: MQTT_DEVICE_ID,
+    seq: ++simSeq,
+    ts: now,
+    window: { start: now - SIM_TICK_MS, end: now, seconds: SIM_TICK_MS / 1000, samples: SIM_SAMPLES },
+    temperature_C: { mean: r2(sim.temperature), min: r2(sim.temperature - 0.08), max: r2(sim.temperature + 0.08) },
+    pH: { mean: r2(sim.ph), min: r2(sim.ph - 0.02), max: r2(sim.ph + 0.02) },
+    rpm: { mean: Math.max(0, Math.round(sim.rpm)), min: Math.max(0, Math.round(sim.rpm - 4)), max: Math.max(0, Math.round(sim.rpm + 4)) },
+    actuators_avg: { heater_pwm: heaterDuty, motor_pwm: motorDuty, acid_pwm: acidDuty, base_pwm: baseDuty },
+    setpoints: { temperature_C: s.temp, pH: s.ph, rpm: s.rpm },
+    mode: s.mode,
+    sp_source: 'dashboard',
+    alarms: [],
   });
 }
 
@@ -255,16 +355,16 @@ mqttBridge.start({
   url: process.env.MQTT_URL || '',
   topicPrefix: process.env.MQTT_TOPIC || 'bioreactor',
   commandDeviceId: process.env.MQTT_DEVICE_ID || 'bio1',
-  onTelemetry: (_device, msg) => {
-    db.insertReading({
-      temperature: db.num(msg.temperature),
-      ph: db.num(msg.ph),
-      rpm: db.num(msg.rpm),
-      heater: msg.heater,
-      pump_acid: msg.pump_acid,
-      pump_alkali: msg.pump_alkali,
-      stirrer: msg.stirrer === undefined ? 1 : msg.stirrer,
-    });
+  onTelemetry: (device, msg) => {
+    storeTelemetry(msg);
+    if (device) markDeviceOnline(device);   // live data proves the link is up
+  },
+  onAck: (_device, msg) => {
+    const n = db.ackCommand(msg.id, msg.ok === true);
+    if (n > 0) db.logEvent('info', `Command ${msg.id} acked (ok=${msg.ok})`);
+  },
+  onStatus: (device, statusText) => {
+    setDeviceStatus(device, statusText);
   },
 });
 

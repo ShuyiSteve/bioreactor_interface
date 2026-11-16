@@ -1,8 +1,7 @@
 /*
  * Bioreactor — ESP32 DevKitC V4 (ESP32-WROVER) network bridge
  * =============================================================
- * This board bridges the Nano controller to the outside world over WiFi using
- * MQTT (the approach recommended in the Connectivity spec).
+ * Bridges the Nano controller to the outside world over WiFi using MQTT.
  *
  * UART side (to the Nano controller, crossed):
  *   DevKit RX2 (GPIO16) <- Nano TX (D1)
@@ -10,8 +9,15 @@
  *   GND                  <-> GND
  *
  * MQTT side:
- *   publish  -> bioreactor/<DEVICE_ID>/telemetry   (JSON, one line per sample)
- *   subscribe-> bioreactor/<DEVICE_ID>/commands    (JSON command from the server)
+ *   publish   -> bioreactor/<DEVICE_ID>/telemetry   (adds unix ts from NTP)
+ *   publish   -> bioreactor/<DEVICE_ID>/ack         (forwards Nano's {id, ok, applied})
+ *   publish   -> bioreactor/<DEVICE_ID>/status      ("online" on connect)
+ *   subscribe -> bioreactor/<DEVICE_ID>/commands
+ *
+ * Team spec:
+ *   item 4 — status topic is the MQTT last will ("offline"); "online" on connect
+ *   item 6 — if the link drops, telemetry is buffered and resent (with its seq)
+ *            once the connection comes back
  *
  * Required libraries:
  *   - PicoMQTT  (recommended by the spec; Library Manager)
@@ -22,6 +28,7 @@
 #include <WiFi.h>
 #include <PicoMQTT.h>
 #include <ArduinoJson.h>
+#include <sys/time.h>
 
 // ---------------------------------------------------------------- config
 // WiFi credentials (SSID / password) live in `secret.h`, which is gitignored
@@ -44,10 +51,16 @@ const unsigned long UART_BAUD = 115200;
 WiFiClient wifiClient;
 PicoMQTT::Client mqtt(MQTT_BROKER, MQTT_PORT, wifiClient);
 
-String txLine = "";   // JSON line arriving from the Nano
-String cmdTopic = "";
-String telTopic = "";
-unsigned long lastReconnect = 0;
+String txLine = "";
+String cmdTopic, telTopic, ackTopic, statusTopic;
+
+// Telemetry buffer for link drops (item 6): store samples while MQTT is down,
+// then resend them (original seq + timestamps preserved) on reconnect.
+const int TELEMETRY_BUFFER_SIZE = 120;   // ~2 min at 1 Hz
+String telemetryBuffer[TELEMETRY_BUFFER_SIZE];
+int bufferHead = 0;
+int bufferCount = 0;
+volatile bool mqttJustConnected = false;
 
 // ---------------------------------------------------------------- wifi
 void connectWiFi() {
@@ -69,42 +82,95 @@ void connectWiFi() {
     Serial.print("  IP address: ");
     Serial.println(WiFi.localIP());
     Serial.println("============================================");
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.println("  NTP sync requested.");
   } else {
     Serial.println();
     Serial.println("WiFi connection failed.");
   }
 }
 
-// ---------------------------------------------------------------- mqtt
-// A command arrived from the server; forward it verbatim to the Nano over UART.
-void onCommand(const char* payload, size_t len) {
-  Serial2.write((const uint8_t*)payload, len);
-  Serial2.print('\n');
-  Serial.printf("[mqtt] forwarded command to Nano (%u bytes)\n", (unsigned)len);
+// Unix time in milliseconds (0 until NTP has synced).
+unsigned long long unixMs() {
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  if (tv.tv_sec < 1600000000) return 0;   // not synced yet
+  return (unsigned long long)tv.tv_sec * 1000ULL + (unsigned long long)(tv.tv_usec / 1000);
 }
 
-void connectMqtt() {
-  if (mqtt.connected()) return;
-  Serial.printf("Connecting MQTT broker %s:%d ...\n", MQTT_BROKER, MQTT_PORT);
-  mqtt.begin();
-  if (mqtt.connected()) {
-    mqtt.subscribe(cmdTopic.c_str(), onCommand);
-    Serial.printf("[mqtt] subscribed to %s\n", cmdTopic.c_str());
+// ---------------------------------------------------------------- mqtt
+// A command arrived from the server; forward it verbatim to the Nano over UART.
+void onCommand(const char* topic, const char* payload) {
+  Serial2.print(payload);
+  Serial2.print('\n');
+  Serial.printf("[mqtt] forwarded command to Nano\n");
+}
+
+// ---------------------------------------------------------------- buffering
+void bufferTelemetry(const String& line) {
+  if (bufferCount < TELEMETRY_BUFFER_SIZE) {
+    telemetryBuffer[(bufferHead + bufferCount) % TELEMETRY_BUFFER_SIZE] = line;
+    bufferCount++;
   } else {
-    Serial.println("[mqtt] connection failed (will retry)");
+    // Full: drop the oldest sample to make room for the newest.
+    telemetryBuffer[bufferHead] = line;
+    bufferHead = (bufferHead + 1) % TELEMETRY_BUFFER_SIZE;
   }
 }
 
+void flushTelemetryBuffer() {
+  int n = bufferCount;
+  while (bufferCount > 0) {
+    String line = telemetryBuffer[bufferHead];
+    bufferHead = (bufferHead + 1) % TELEMETRY_BUFFER_SIZE;
+    bufferCount--;
+    mqtt.publish(telTopic.c_str(), line.c_str());
+  }
+  if (n > 0) Serial.printf("[mqtt] flushed %d buffered telemetry samples\n", n);
+}
+
 // ---------------------------------------------------------------- uart -> mqtt
+// Route a line from the Nano: telemetry (has "seq") or ack (has "id"+"ok").
+void handleNanoLine(const String& line) {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, line);
+  if (err) return;
+
+  if (doc.containsKey("seq")) {
+    // Telemetry: stamp the unix timestamps from NTP before publishing.
+    unsigned long long ts = unixMs();
+    if (ts != 0) {
+      doc["ts"] = (int64_t)ts;
+      JsonObject win = doc["window"].as<JsonObject>();
+      if (!win.isNull()) {
+        double secs = win["seconds"] | 1.0;
+        win["start"] = (int64_t)(ts - (unsigned long long)(secs * 1000.0));
+        win["end"] = (int64_t)ts;
+      }
+    }
+    String out;
+    serializeJson(doc, out);
+
+    if (mqtt.connected()) {
+      mqtt.publish(telTopic.c_str(), out.c_str());
+    } else {
+      bufferTelemetry(out);   // link down: buffer and resend later (item 6)
+    }
+  } else if (doc.containsKey("id") && doc.containsKey("ok")) {
+    // Command acknowledgement from the Nano (only useful while connected).
+    if (mqtt.connected()) mqtt.publish(ackTopic.c_str(), line.c_str());
+  }
+}
+
 void readNano() {
   while (Serial2.available()) {
     char c = (char)Serial2.read();
     if (c == '\n') {
       if (txLine.length() > 0) {
-        mqtt.publish(telTopic.c_str(), txLine.c_str());
+        handleNanoLine(txLine);
         txLine = "";
       }
-    } else if (txLine.length() < 512) {
+    } else if (txLine.length() < 1024) {
       txLine += c;
     }
   }
@@ -117,22 +183,41 @@ void setup() {
 
   cmdTopic = String(TOPIC) + "/" + DEVICE_ID + "/commands";
   telTopic = String(TOPIC) + "/" + DEVICE_ID + "/telemetry";
+  ackTopic = String(TOPIC) + "/" + DEVICE_ID + "/ack";
+  statusTopic = String(TOPIC) + "/" + DEVICE_ID + "/status";
+
+  // Item 4: status topic via MQTT last will. The broker publishes "offline" on
+  // our behalf if we drop unexpectedly; we publish "online" on connect.
+  mqtt.will.topic = statusTopic.c_str();
+  mqtt.will.payload = "offline";
+  mqtt.will.qos = 0;
+  mqtt.will.retain = true;
+
+  mqtt.connected_callback = [] {
+    mqttJustConnected = true;
+    Serial.println("[mqtt] connected");
+  };
+  mqtt.disconnected_callback = [] {
+    Serial.println("[mqtt] disconnected (will publish offline via LWT)");
+  };
+
+  mqtt.subscribe(cmdTopic.c_str(), onCommand);
 
   connectWiFi();
-  connectMqtt();
+  mqtt.begin();
   Serial.println("DevKitC bridge booted.");
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  mqtt.loop();   // PicoMQTT auto-reconnects and re-subscribes
 
-  // Retry MQTT every 5 s if it drops.
-  if (!mqtt.connected() && millis() - lastReconnect > 5000) {
-    lastReconnect = millis();
-    connectMqtt();
+  // On (re)connect: announce online + flush buffered telemetry (items 4 + 6).
+  if (mqttJustConnected) {
+    mqttJustConnected = false;
+    mqtt.publish(statusTopic.c_str(), "online");
+    flushTelemetryBuffer();
   }
 
-  mqtt.loop();
   readNano();
   delay(5);
 }
