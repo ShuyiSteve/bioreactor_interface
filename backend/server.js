@@ -11,7 +11,12 @@
 //   MQTT_URL      MQTT broker URL, e.g. "mqtt://broker.hivemq.com:1883" (disabled if unset)
 //   MQTT_TOPIC    MQTT topic prefix (default "bioreactor")
 //   MQTT_DEVICE_ID device id for outgoing MQTT commands (default "bio1")
+//
+// You can also put these in a `.env` file at the repo root (see `.env.example`).
 'use strict';
+
+// Load .env first so DB_PATH / MQTT_URL etc. are available everywhere below.
+require('dotenv').config();
 
 process.env.NODE_NO_WARNINGS = process.env.NODE_NO_WARNINGS || '1';
 
