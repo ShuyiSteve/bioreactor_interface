@@ -49,7 +49,7 @@ const char* TOPIC     = "bioreactor"; // must match MQTT_TOPIC on the server
 const unsigned long UART_BAUD = 115200;
 
 WiFiClient wifiClient;
-PicoMQTT::Client mqtt(MQTT_BROKER, MQTT_PORT, wifiClient);
+PicoMQTT::Client mqtt(wifiClient, MQTT_BROKER, MQTT_PORT);
 
 String txLine = "";
 String cmdTopic, telTopic, ackTopic, statusTopic;
@@ -188,7 +188,7 @@ void setup() {
 
   // Item 4: status topic via MQTT last will. The broker publishes "offline" on
   // our behalf if we drop unexpectedly; we publish "online" on connect.
-  mqtt.will.topic = statusTopic.c_str();
+  mqtt.will.topic = statusTopic;
   mqtt.will.payload = "offline";
   mqtt.will.qos = 0;
   mqtt.will.retain = true;
@@ -201,7 +201,7 @@ void setup() {
     Serial.println("[mqtt] disconnected (will publish offline via LWT)");
   };
 
-  mqtt.subscribe(cmdTopic.c_str(), onCommand);
+  mqtt.subscribe(cmdTopic, onCommand);
 
   connectWiFi();
   mqtt.begin();

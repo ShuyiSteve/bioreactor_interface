@@ -127,14 +127,43 @@ float readRPM() {
 }
 
 // ---------------------------------------------------------------- actuators
+// Arduino-ESP32 core 2.x (e.g. the Arduino Nano ESP32 board package) uses
+// ledcSetup + ledcAttachPin with a channel number, while core 3.x uses
+// ledcAttach with the pin directly. These wrappers keep the control code
+// identical on both cores.
+static const int LEDC_CH_HEATER  = 0;
+static const int LEDC_CH_STIRRER = 1;
+static const int LEDC_FREQ       = 5000;   // 5 kHz
+static const int LEDC_RES        = 8;      // 8-bit duty
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+void pwmAttach(int pin, int channel, int freq, int res) {
+  (void)channel;
+  ledcAttach(pin, freq, res);
+}
+void pwmWrite(int pin, int channel, int duty) {
+  (void)channel;
+  ledcWrite(pin, duty);
+}
+#else
+void pwmAttach(int pin, int channel, int freq, int res) {
+  ledcSetup(channel, freq, res);
+  ledcAttachPin(pin, channel);
+}
+void pwmWrite(int pin, int channel, int duty) {
+  (void)pin;
+  ledcWrite(channel, duty);
+}
+#endif
+
 void setHeaterDuty(float d) {
   heaterDuty = constrain(d, 0.0f, HEATER_MAX);   // hard 60% cap
-  ledcWrite(PIN_HEATER, (int)(heaterDuty * 255.0f));
+  pwmWrite(PIN_HEATER, LEDC_CH_HEATER, (int)(heaterDuty * 255.0f));
 }
 
 void setMotorDuty(float d) {
   motorDuty = constrain(d, 0.0f, 1.0f);
-  ledcWrite(PIN_STIRRER_PWM, (int)(motorDuty * 255.0f));
+  pwmWrite(PIN_STIRRER_PWM, LEDC_CH_STIRRER, (int)(motorDuty * 255.0f));
 }
 
 void setAcidDuty(float d) {
@@ -259,7 +288,7 @@ void sendControlAck(const char* id, bool ok) {
 void applyCommand(const JsonDocument& cmd) {
   const char* id = cmd["id"] | "";
   const char* type = cmd["type"] | "";
-  JsonObject p = cmd["payload"].as<JsonObject>();
+  JsonObjectConst p = cmd["payload"].as<JsonObjectConst>();
 
   if (String(type) == "setpoints") {
     bool ok = true;
@@ -326,10 +355,10 @@ void setup() {
   digitalWrite(PIN_PUMP_ACID, LOW);
   digitalWrite(PIN_PUMP_ALKALI, LOW);
 
-  ledcAttach(PIN_HEATER, 5000, 8);        // heater PWM (60% cap applied in setHeaterDuty)
-  ledcAttach(PIN_STIRRER_PWM, 5000, 8);   // stirrer PWM
-  ledcWrite(PIN_HEATER, 0);
-  ledcWrite(PIN_STIRRER_PWM, 0);
+  pwmAttach(PIN_HEATER, LEDC_CH_HEATER, LEDC_FREQ, LEDC_RES);        // heater PWM (60% cap applied in setHeaterDuty)
+  pwmAttach(PIN_STIRRER_PWM, LEDC_CH_STIRRER, LEDC_FREQ, LEDC_RES);  // stirrer PWM
+  pwmWrite(PIN_HEATER, LEDC_CH_HEATER, 0);
+  pwmWrite(PIN_STIRRER_PWM, LEDC_CH_STIRRER, 0);
 
   attachInterrupt(digitalPinToInterrupt(PIN_RPM_SENSOR), rpmISR, FALLING);
 
