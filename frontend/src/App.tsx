@@ -99,6 +99,8 @@ export default function App() {
   const setpoints = status?.setpoints
   const control: ControlState | undefined = status?.control
   const online = status?.device.online ?? false
+  const alarms = status?.telemetry.alarms ?? []
+  const spSource = status?.telemetry.sp_source
 
   const meta = PARAM_META[param]
   const reference = setpoints ? setpoints[param] : undefined
@@ -151,11 +153,22 @@ export default function App() {
             {online ? 'Device connected' : 'Device offline'}
           </span>
           {lastSeen && <span className="conn-meta">last seen {lastSeen}</span>}
+          {spSource && <span className="conn-meta">set points from {spSource}</span>}
         </div>
       </header>
 
       <main className="layout">
         {error && <div className="banner error">⚠ {error}</div>}
+        {status && !online && (
+          <div className="banner warn" role="status">
+            Device offline. The Nano keeps controlling with its last set points; changes sent now will not be confirmed.
+          </div>
+        )}
+        {alarms.length > 0 && (
+          <div className="banner error" role="alert">
+            ⚠ Alarms: {alarms.join(', ')}
+          </div>
+        )}
 
         <section className="stats-grid">
           <StatCard
@@ -240,7 +253,12 @@ export default function App() {
 
         <div className="side-grid">
           {setpoints && (
-            <SetpointPanel setpoints={setpoints} busy={busy} onApply={applySetpoints} />
+            <SetpointPanel
+              setpoints={setpoints}
+              command={status?.setpointCommand ?? null}
+              busy={busy}
+              onApply={applySetpoints}
+            />
           )}
           {control && setpoints && (
             <ControlPanel

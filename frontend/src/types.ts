@@ -25,11 +25,15 @@ export interface ControlState {
   stirrer: number
 }
 
+export type CommandStatus = 'pending' | 'confirmed' | 'rejected' | 'timeout'
+
 export interface Status {
   device: { online: boolean; lastSeen: string | null }
   latest: LatestReading | null
   setpoints: Setpoints
   control: ControlState
+  telemetry: { sp_source: string | null; alarms: string[] }
+  setpointCommand: { id: string; status: CommandStatus; sentAt: string } | null
 }
 
 export interface SeriesPoint {
