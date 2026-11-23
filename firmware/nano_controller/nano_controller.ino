@@ -37,6 +37,7 @@ const char* DEVICE_ID = "bio1";   // matches MQTT_DEVICE_ID on the server
 // ---------------------------------------------------------------- pin map
 const int PIN_TEMP_ADC    = A0;  // thermistor divider (10 k NTC + 10 k series)
 const int PIN_PH_ADC      = A1;  // pH probe conditioning board
+const int PIN_POT_ADC     = A2;  // set-point potentiometer (3.3 V divider; not read yet, waiting on hardware)
 const int PIN_RPM_SENSOR  = 2;   // RPM sensor (Hall effect = 70 pulses/rev)
 const int PIN_HEATER      = 3;   // heater (PWM, 3 Ohm / 30 W)
 const int PIN_PUMP_ACID   = 4;   // acid peristaltic pump
@@ -75,7 +76,7 @@ float setpointTemp = 30.0f;
 float setpointPh   = 5.0f;
 float setpointRpm  = 1000.0f;
 String mode        = "auto";
-String spSource    = "default";      // "default" | "dashboard"
+String spSource    = "default";      // "default" | "dashboard" | "potentiometer"
 
 // Actuator duties (0..1). Pumps are on/off so their duty is 0 or 1.
 float heaterDuty = 0.0f;
@@ -291,26 +292,23 @@ void applyCommand(const JsonDocument& cmd) {
   JsonObjectConst p = cmd["payload"].as<JsonObjectConst>();
 
   if (String(type) == "setpoints") {
-    bool ok = true;
-
-    if (p["temperature_C"].is<float>()) {
-      float v = p["temperature_C"].as<float>();
-      ok = ok && (v >= 25.0f && v <= 35.0f);
-      setpointTemp = constrain(v, 25.0f, 35.0f);
+    // Range-check everything first; apply all or nothing. On reject, "applied"
+    // in the ack carries the unchanged set points so the dashboard can resync.
+    float t = p["temperature_C"] | setpointTemp;
+    float ph = p["pH"] | setpointPh;
+    float r = p["rpm"] | setpointRpm;
+    String m = p["mode"] | mode.c_str();
+    bool ok = t >= 25.0f && t <= 35.0f &&
+              ph >= 3.0f && ph <= 7.0f &&
+              r >= 500.0f && r <= 1500.0f &&
+              (m == "auto" || m == "manual");
+    if (ok) {
+      setpointTemp = t;
+      setpointPh = ph;
+      setpointRpm = r;
+      mode = m;
+      spSource = "dashboard";
     }
-    if (p["pH"].is<float>()) {
-      float v = p["pH"].as<float>();
-      ok = ok && (v >= 3.0f && v <= 7.0f);
-      setpointPh = constrain(v, 3.0f, 7.0f);
-    }
-    if (p["rpm"].is<float>()) {
-      float v = p["rpm"].as<float>();
-      ok = ok && (v >= 500.0f && v <= 1500.0f);
-      setpointRpm = constrain(v, 500.0f, 1500.0f);
-    }
-    if (p["mode"].is<const char*>()) mode = p["mode"].as<const char*>();
-
-    spSource = "dashboard";
     sendSetpointAck(id, ok);
     Serial.printf("[cmd] setpoints %.1f C / pH %.1f / %.0f RPM / %s (ok=%d)\n",
                   setpointTemp, setpointPh, setpointRpm, mode.c_str(), ok);

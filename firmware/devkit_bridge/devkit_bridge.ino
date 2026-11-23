@@ -9,7 +9,7 @@
  *   GND                  <-> GND
  *
  * MQTT side:
- *   publish   -> bioreactor/<DEVICE_ID>/telemetry   (adds unix ts from NTP)
+ *   publish   -> bioreactor/<DEVICE_ID>/telemetry   (adds NTP window times + ts)
  *   publish   -> bioreactor/<DEVICE_ID>/ack         (forwards Nano's {id, ok, applied})
  *   publish   -> bioreactor/<DEVICE_ID>/status      ("online" on connect)
  *   subscribe -> bioreactor/<DEVICE_ID>/commands
@@ -34,6 +34,12 @@
 // WiFi credentials (SSID / password) live in `secret.h`, which is gitignored
 // so nobody accidentally commits their real credentials.
 #include "secret.h"
+#ifndef USE_EDUROAM
+#define USE_EDUROAM 0   // older secret.h files without the eduroam option
+#endif
+#if USE_EDUROAM
+#include "esp_eap_client.h"
+#endif
 
 // Public brokers suggested by the spec:
 //   broker.hivemq.com      (public, no auth)
@@ -65,11 +71,22 @@ volatile bool mqttJustConnected = false;
 // ---------------------------------------------------------------- wifi
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
-  Serial.printf("Connecting to %s", WIFI_SSID);
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
+#if USE_EDUROAM
+  // Same approach as the Moodle "Connecting to eduroam" example (Week 4).
+  Serial.printf("Connecting to eduroam as %s", WIFI_USER);
+  esp_eap_client_set_identity((uint8_t*)WIFI_USER, strlen(WIFI_USER));
+  esp_eap_client_set_username((uint8_t*)WIFI_USER, strlen(WIFI_USER));
+  esp_eap_client_set_password((uint8_t*)WIFI_PASS, strlen(WIFI_PASS));
+  esp_wifi_sta_enterprise_enable();
+  WiFi.begin(WIFI_SSID);
+#else
+  Serial.printf("Connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+#endif
   unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
     delay(250);
     Serial.print('.');
   }
@@ -138,14 +155,16 @@ void handleNanoLine(const String& line) {
 
   if (doc.containsKey("seq")) {
     // Telemetry: stamp the unix timestamps from NTP before publishing.
+    // window.start/end are unix seconds (as in the agreed format); ts is the
+    // same end time in unix ms, which the server stores.
     unsigned long long ts = unixMs();
     if (ts != 0) {
       doc["ts"] = (int64_t)ts;
       JsonObject win = doc["window"].as<JsonObject>();
       if (!win.isNull()) {
         double secs = win["seconds"] | 1.0;
-        win["start"] = (int64_t)(ts - (unsigned long long)(secs * 1000.0));
-        win["end"] = (int64_t)ts;
+        win["end"] = ts / 1000.0;
+        win["start"] = ts / 1000.0 - secs;
       }
     }
     String out;
