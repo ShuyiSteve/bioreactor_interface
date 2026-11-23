@@ -32,6 +32,7 @@ const PORT = Number(process.env.PORT) || 3001;
 const SIMULATE = String(process.env.SIMULATE ?? 'true') !== 'false';
 const SEED = String(process.env.SEED ?? 'true') !== 'false';
 const ONLINE_WINDOW_MS = 15000;
+const ACK_TIMEOUT_MS = 5000;   // no ack within this → dashboard warns
 const MQTT_DEVICE_ID = process.env.MQTT_DEVICE_ID || 'bio1';
 
 // Device presence from the MQTT status topic (item 4): the DevKitC publishes
@@ -71,11 +72,20 @@ function parseRange(range) {
   return n * mult;
 }
 
+// pending → confirmed | rejected, or timeout if the Nano never answered.
+function commandState(cmd) {
+  if (!cmd) return null;
+  let status;
+  if (cmd.status === 'acked') status = cmd.applied ? 'confirmed' : 'rejected';
+  else status = Date.now() - cmd.createdAt > ACK_TIMEOUT_MS ? 'timeout' : 'pending';
+  return { id: cmd.id, status, sentAt: new Date(cmd.createdAt).toISOString() };
+}
+
 function buildStatus() {
-  const latest = db.getLatest();
+  const { raw, ...latest } = db.getLatest() || {};
   const setpoints = db.getSettings();
   const control = db.getControlState();
-  const lastSeen = latest ? latest.ts : 0;
+  const lastSeen = latest.ts || 0;
   const st = deviceStatus.get(MQTT_DEVICE_ID);
   // Item 4: the MQTT status topic is authoritative when we have it; otherwise
   // fall back to "recent reading" so simulation/HTTP mode still works.
@@ -87,9 +97,15 @@ function buildStatus() {
       online,
       lastSeen: lastSeen ? new Date(lastSeen).toISOString() : null,
     },
-    latest: latest || null,
+    latest: latest.ts ? latest : null,
     setpoints,
     control,
+    // From the latest telemetry; the legacy flat format has neither field.
+    telemetry: {
+      sp_source: raw?.sp_source ?? null,
+      alarms: Array.isArray(raw?.alarms) ? raw.alarms : [],
+    },
+    setpointCommand: commandState(db.getLastCommand('setpoints')),
   };
 }
 
@@ -201,6 +217,7 @@ app.post('/api/setpoints', (req, res) => {
   const setpointPayload = { temperature_C: next.temp, pH: next.ph, rpm: next.rpm, mode: next.mode };
   const setpointCmd = db.enqueueCommand('setpoints', setpointPayload);
   mqttBridge.publishCommand(setpointCmd.id, 'setpoints', setpointPayload);
+  if (SIMULATE && !mqttBridge.isEnabled()) db.ackCommand(setpointCmd.id, true); // simulator stands in for the Nano
   db.logEvent(
     'info',
     `Setpoints → ${next.temp.toFixed(1)} °C · pH ${next.ph.toFixed(1)} · ${Math.round(next.rpm)} RPM · ${next.mode}`
@@ -227,6 +244,7 @@ app.post('/api/control', (req, res) => {
   };
   const controlCmd = db.enqueueCommand('control', controlPayload);
   mqttBridge.publishCommand(controlCmd.id, 'control', controlPayload);
+  if (SIMULATE && !mqttBridge.isEnabled()) db.ackCommand(controlCmd.id, true);
   db.logEvent(
     'info',
     `Manual control → heater ${next.heater ? 'ON' : 'OFF'} · acid ${next.pump_acid ? 'ON' : 'OFF'} · alkali ${next.pump_alkali ? 'ON' : 'OFF'} · stirrer ${next.stirrer ? 'ON' : 'OFF'}`
@@ -309,6 +327,7 @@ function simulateTick() {
 
   const r2 = (v) => Math.round(v * 100) / 100;
   const now = Date.now();
+  const nowS = now / 1000;
 
   // Emit the SAME course telemetry shape the Nano sends, so Data Analysis
   // works identically on simulated and real data.
@@ -316,7 +335,7 @@ function simulateTick() {
     device: MQTT_DEVICE_ID,
     seq: ++simSeq,
     ts: now,
-    window: { start: now - SIM_TICK_MS, end: now, seconds: SIM_TICK_MS / 1000, samples: SIM_SAMPLES },
+    window: { start: nowS - SIM_TICK_MS / 1000, end: nowS, seconds: SIM_TICK_MS / 1000, samples: SIM_SAMPLES },
     temperature_C: { mean: r2(sim.temperature), min: r2(sim.temperature - 0.08), max: r2(sim.temperature + 0.08) },
     pH: { mean: r2(sim.ph), min: r2(sim.ph - 0.02), max: r2(sim.ph + 0.02) },
     rpm: { mean: Math.max(0, Math.round(sim.rpm)), min: Math.max(0, Math.round(sim.rpm - 4)), max: Math.max(0, Math.round(sim.rpm + 4)) },
@@ -366,10 +385,25 @@ mqttBridge.start({
   },
   onAck: (_device, msg) => {
     const n = db.ackCommand(msg.id, msg.ok === true);
-    if (n > 0) db.logEvent('info', `Command ${msg.id} acked (ok=${msg.ok})`);
+    if (n === 0) return;
+    db.logEvent(msg.ok === true ? 'info' : 'warn', `Command ${msg.id} ${msg.ok === true ? 'confirmed' : 'rejected'} by device`);
+    // Keep the dashboard's set points equal to what the Nano is actually using.
+    const a = msg.applied || {};
+    if (a.temperature_C !== undefined) {
+      const cur = db.getSettings();
+      db.updateSettings({
+        temp: db.num(a.temperature_C, cur.temp),
+        ph: db.num(a.pH, cur.ph),
+        rpm: db.num(a.rpm, cur.rpm),
+        mode: cur.mode,
+      });
+    }
   },
   onStatus: (device, statusText) => {
     setDeviceStatus(device, statusText);
+  },
+  onAlert: (device, msg) => {
+    db.logEvent('warn', `Alert (${device}): ${msg.message || JSON.stringify(msg)}`);
   },
 });
 

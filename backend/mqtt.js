@@ -5,6 +5,7 @@
 //   <topic>/<deviceId>/commands    server -> device  (JSON command with id)
 //   <topic>/<deviceId>/ack         device -> server  (command acknowledgement)
 //   <topic>/<deviceId>/status       device -> server  ("online"/"offline" via LWT)
+//   <topic>/<deviceId>/alerts       Data Analysis -> server  ({ level?, message }) — proposed, to agree with Graham
 //
 // Environment variables:
 //   MQTT_URL         e.g. "mqtt://broker.hivemq.com:1883" (disabled if unset)
@@ -18,8 +19,9 @@ let deviceId = 'bio1';
 let onTelemetryCb = null;
 let onAckCb = null;
 let onStatusCb = null;
+let onAlertCb = null;
 
-function start({ url, topicPrefix, commandDeviceId, onTelemetry, onAck, onStatus }) {
+function start({ url, topicPrefix, commandDeviceId, onTelemetry, onAck, onStatus, onAlert }) {
   if (!url) return null;
 
   topic = topicPrefix || topic;
@@ -27,6 +29,7 @@ function start({ url, topicPrefix, commandDeviceId, onTelemetry, onAck, onStatus
   onTelemetryCb = onTelemetry;
   onAckCb = onAck;
   onStatusCb = onStatus;
+  onAlertCb = onAlert;
 
   // Lazy require so HTTP-only deployments never load the MQTT dependency.
   // eslint-disable-next-line global-require
@@ -37,7 +40,8 @@ function start({ url, topicPrefix, commandDeviceId, onTelemetry, onAck, onStatus
     client.subscribe(`${topic}/+/telemetry`, { qos: 0 });
     client.subscribe(`${topic}/+/ack`, { qos: 0 });
     client.subscribe(`${topic}/+/status`, { qos: 0 });
-    console.log(`[mqtt] connected to ${url}, subscribed to ${topic}/+/telemetry, ${topic}/+/ack and ${topic}/+/status`);
+    client.subscribe(`${topic}/+/alerts`, { qos: 0 });
+    console.log(`[mqtt] connected to ${url}, subscribed to ${topic}/+/{telemetry,ack,status,alerts}`);
   });
 
   client.on('message', (t, payload) => {
@@ -61,7 +65,9 @@ function start({ url, topicPrefix, commandDeviceId, onTelemetry, onAck, onStatus
 
     if (kind === 'ack') {
       if (onAckCb) onAckCb(device, msg);
-    } else {
+    } else if (kind === 'alerts') {
+      if (onAlertCb) onAlertCb(device, msg);
+    } else if (kind === 'telemetry') {
       if (onTelemetryCb) onTelemetryCb(device, msg);
     }
   });

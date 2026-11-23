@@ -143,8 +143,16 @@ as line-delimited JSON, and the DevKitC then moves it over **MQTT**.
    }
    ```
 3. The DevKitC reads the line from `Serial2`, adds the **unix timestamps from
-   NTP** (top-level `ts` plus absolute `window.start` / `window.end`), and
-   publishes it to `bioreactor/<device>/telemetry`.
+   NTP** and publishes it to `bioreactor/<device>/telemetry`. On the Nano,
+   `window.start` / `window.end` are milliseconds since boot (it has no clock);
+   the DevKitC replaces them with **unix seconds** and adds `ts` (the window end
+   in unix ms, which the server stores):
+   ```json
+   "window": {"start": 1763300000.0, "end": 1763300001.0, "seconds": 1.0, "samples": 10},
+   "ts": 1763300001000
+   ```
+   `sp_source` is `default` (boot values), `dashboard` or `potentiometer`.
+   `alarms` is a list of short strings; empty when all is well.
 4. The server is subscribed to `bioreactor/+/telemetry`, parses it, and stores a
    row in SQLite (the mean values feed the dashboard; the full JSON is kept in a
    `raw` column for Data Analysis).
@@ -161,10 +169,15 @@ as line-delimited JSON, and the DevKitC then moves it over **MQTT**.
     "payload": {"temperature_C": 32.0, "pH": 5.5, "rpm": 1150, "mode": "auto"}}
    ```
 3. The DevKitC forwards the raw JSON over UART to the Nano.
-4. The Nano **range-checks** every setpoint (25–35 °C, 500–1500 RPM, pH 3–7),
-   applies them, and replies over UART with `{id, ok, applied}`.
+4. The Nano **range-checks** every setpoint (25–35 °C, 500–1500 RPM, pH 3–7,
+   mode `auto`/`manual`). If all are valid it applies them; if any is out of
+   range it applies none. Either way it replies over UART with
+   `{"id": "…", "ok": true|false, "applied": {"temperature_C": 32.0, "pH": 5.5, "rpm": 1150}}`,
+   where `applied` is what the Nano is now using.
 5. The DevKitC publishes that reply to `bioreactor/<device>/ack`; the server
-   marks the command acknowledged.
+   marks the command confirmed or rejected and resyncs its set points to
+   `applied`. The dashboard shows "confirmed", or a warning if the command was
+   rejected or no ack arrived within 5 s.
 
 **MQTT topics**
 
@@ -174,6 +187,10 @@ as line-delimited JSON, and the DevKitC then moves it over **MQTT**.
 | Downlink | `bioreactor/<device>/commands` | server → DevKitC |
 | Ack | `bioreactor/<device>/ack` | DevKitC → server |
 | Status | `bioreactor/<device>/status` | DevKitC → server (`online` / `offline`) |
+| Alerts | `bioreactor/<device>/alerts` | Data Analysis → server (`{"level": "warn", "message": "…"}`), shown in Activity. Proposed, to agree with Graham |
+
+To watch every message live while testing, run `npm run monitor` (prints all
+of `bioreactor/bio1/#` with a timestamp; optional broker URL argument).
 
 `<device>` defaults to `bio1` on both sides and must match
 (`MQTT_DEVICE_ID` on the server, `DEVICE_ID` in the firmware).
