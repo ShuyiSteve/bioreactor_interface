@@ -1,0 +1,7 @@
+features,rule,pooled,f1_at_3.5/2.5,z_on,z_off,window,tp,tn,fp,fn,precision,recall,f1,faults,missed,median_delay_s,max_delay_s,fp_within_30s_after
+basic,hysteresis,False,0.527,50.0,25.0,10,569,326,1042,194,0.353,0.746,0.479,12,1,0.0,37.0,235
+basic,window,False,0.526,50.0,25.0,5,567,321,1047,196,0.351,0.743,0.477,12,1,0.0,39.0,236
+basic,hysteresis,True,0.529,50.0,25.0,10,569,326,1042,194,0.353,0.746,0.479,12,1,0.0,37.0,235
+model,hysteresis,False,0.997,4.0,2.0,10,762,1362,6,1,0.992,0.999,0.995,12,0,0.0,0.0,1
+model,window,False,0.942,6.0,5.4,3,752,1357,11,11,0.986,0.986,0.986,12,0,1.0,1.0,11
+model,hysteresis,True,0.996,4.0,2.0,10,762,1361,7,1,0.991,0.999,0.995,12,0,0.0,0.0,2
