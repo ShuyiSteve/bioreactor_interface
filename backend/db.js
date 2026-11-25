@@ -211,13 +211,12 @@ function insertReading({
 }
 
 function getLatest() {
-  return (
-    db
-      .prepare(
-        'SELECT ts, temperature, ph, rpm, heater, pump_acid, pump_alkali, stirrer FROM readings ORDER BY ts DESC, id DESC LIMIT 1'
-      )
-      .get() || null
-  );
+  const row = db
+    .prepare(
+      'SELECT ts, temperature, ph, rpm, heater, pump_acid, pump_alkali, stirrer, raw FROM readings ORDER BY ts DESC, id DESC LIMIT 1'
+    )
+    .get();
+  return row ? { ...row, raw: row.raw ? safeParse(row.raw) : null } : null;
 }
 
 function countReadings() {
@@ -298,6 +297,17 @@ function ackCommand(commandId, ok) {
   return Number(info.changes);
 }
 
+// Most recent set-point command, for the dashboard's "confirmed" indicator.
+function getLastCommand(type) {
+  return (
+    db
+      .prepare(
+        'SELECT command_id AS id, status, created_at AS createdAt, applied FROM commands WHERE type = ? ORDER BY id DESC LIMIT 1'
+      )
+      .get(type) || null
+  );
+}
+
 function ackCommands(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return 0;
   let changed = 0;
@@ -350,6 +360,7 @@ module.exports = {
   getPendingCommands,
   ackCommand,
   ackCommands,
+  getLastCommand,
   logEvent,
   getEvents,
   num,

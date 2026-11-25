@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { Setpoints } from '../types'
+import type { Setpoints, Status } from '../types'
 
 interface SetpointPanelProps {
   setpoints: Setpoints
+  command: Status['setpointCommand']
   busy: boolean
   onApply: (next: { temp: number; ph: number; rpm: number }) => void | Promise<void>
 }
@@ -14,9 +15,16 @@ const CONTROLS = [
   { key: 'rpm', label: 'Stirring speed', unit: 'RPM', min: 500, max: 1500, step: 20, color: '#6ea8ff' },
 ] as const
 
+const ACK_TEXT = {
+  pending: { text: 'Sent, waiting for the device to confirm…', tone: 'muted' },
+  confirmed: { text: '✓ Confirmed by the device', tone: 'ok' },
+  rejected: { text: '⚠ Rejected by the device (out of range). Showing the values it kept.', tone: 'warn' },
+  timeout: { text: '⚠ No confirmation from the device within 5 s. Check the link.', tone: 'warn' },
+} as const
+
 type Key = (typeof CONTROLS)[number]['key']
 
-export default function SetpointPanel({ setpoints, busy, onApply }: SetpointPanelProps) {
+export default function SetpointPanel({ setpoints, command, busy, onApply }: SetpointPanelProps) {
   const [draft, setDraft] = useState<Record<Key, number>>({
     temp: setpoints.temp,
     ph: setpoints.ph,
@@ -83,6 +91,12 @@ export default function SetpointPanel({ setpoints, busy, onApply }: SetpointPane
           )
         })}
       </div>
+
+      {command && (
+        <p className={`ack-status ack-${ACK_TEXT[command.status].tone}`} role="status">
+          {ACK_TEXT[command.status].text}
+        </p>
+      )}
 
       <div className="panel-actions">
         <button

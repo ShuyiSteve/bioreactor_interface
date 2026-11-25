@@ -9,6 +9,7 @@
     "frontend": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
     "start": "node --disable-warning=ExperimentalWarning backend/server.js",
+    "monitor": "node scripts/monitor.js",
     "seed": "node backend/seed.js",
     "reset-db": "node backend/seed.js --reset"
   },
