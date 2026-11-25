@@ -253,8 +253,8 @@ void loop() {
   meanSpeed = 0.1f * measSpeed + 0.9f * meanSpeed;
 
   // ---- PI control ----
-  if (stallAlarm) {
-    Vmotor = 0;
+  if (stallAlarm || setpoint == 0) {
+    Vmotor = stallAlarm ? 0 : max(0, Vmotor - RAMP_MAX_STEP);
     integral = 0;
   } else {
     float error = setpoint - measSpeed;
