@@ -77,7 +77,9 @@ me() {
 b64d() { base64 -d 2>/dev/null || base64 -D; }
 
 # Row format: id<TAB>login<TAB>created_at<TAB>base64(body). Non-zero on gh failure.
-JQ_ROW='.[] | "\(.id)\t\(.user.login)\t\(.created_at)\t\(.body | @base64)"'
+# Only collaborators' posts are shown: the repo is public, so anyone on GitHub can
+# comment on the issue, and agents must never act on a stranger's text.
+JQ_ROW='.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | "\(.id)\t\(.user.login)\t\(.created_at)\t\(.body | @base64)"'
 
 # Comments updated at/after $1 (ISO time). One API call when nothing is new.
 fetch_since() {
