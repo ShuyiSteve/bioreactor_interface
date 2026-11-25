@@ -228,7 +228,7 @@ void loop() {
 
   float deltaT = (now - prevTimeUs) * 1e-6f;
   prevTimeUs = now;
-  nextSampleUs += SAMPLE_US;
+  nextSampleUs = now + SAMPLE_US;
 
   // ---- Auto set-point step ----
   if (autoStep && (millis() - lastStepMs >= STEP_PERIOD_MS)) {
