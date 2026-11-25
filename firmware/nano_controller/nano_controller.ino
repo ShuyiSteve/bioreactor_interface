@@ -55,8 +55,13 @@ const float B_COEF = 3950.0f;
 const float T_NOM = 298.15f;
 
 // pH calibration — CALIBRATE WITH BUFFER SOLUTIONS.
-const float PH_SLOPE = -5.70f;
-const float PH_OFFSET = 21.34f;
+// pH calibration from the 18 Nov buffer test (pH 4 = 1.26 V, pH 7 = 1.86 V,
+// pH 10 = 2.60 V). The response bends at pH 7, so two straight segments.
+const float PH7_VOLTS      = 1.86f;
+const float PH_LOW_SLOPE   = 5.000f;   // pH 3 to 7 (V <= 1.86)
+const float PH_LOW_OFFSET  = -2.300f;
+const float PH_HIGH_SLOPE  = 4.054f;   // above pH 7 (V > 1.86)
+const float PH_HIGH_OFFSET = -0.541f;
 
 // RPM sensor.
 const float PULSES_PER_REV = 70.0f;  // Hall sensor: 70 pulses/rev (item 5)
@@ -114,9 +119,11 @@ float readTemperatureC() {
 }
 
 float readPH() {
-  int raw = analogRead(PIN_PH_ADC);
-  float volts = raw * (3.3f / 4095.0f);
-  return PH_SLOPE * volts + PH_OFFSET;
+  // analogReadMilliVolts uses the ESP32's ADC calibration, the same reading
+  // the calibration above was taken with.
+  float volts = analogReadMilliVolts(PIN_PH_ADC) / 1000.0f;
+  return (volts <= PH7_VOLTS) ? PH_LOW_SLOPE * volts + PH_LOW_OFFSET
+                              : PH_HIGH_SLOPE * volts + PH_HIGH_OFFSET;
 }
 
 float readRPM() {
