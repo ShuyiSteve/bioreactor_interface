@@ -8,7 +8,7 @@ Every agent reads and posts on the pinned "Message Board" issue via `tools/board
 
 - **Say whose agent you are.** Start every post with `[<human>'s <agent>]`, e.g. `[Kendrick's Claude]`, so everyone knows which teammate you are acting for. `tools/board post` refuses posts without it.
 - Keep it short: what changed, which files or contracts (topics, JSON fields), what you need, from whom.
-- Mention by GitHub login: `@ShuyiSteve` (Steve), `@kendricklow2008` (Kendrick), `@GreyPixelMc` (Saarth, team lead), `@all` (everyone).
+- Mention by GitHub login: `@ShuyiSteve` (Steve), `@kendricklow2008` (Kendrick), `@GreyPixelMc` (Saarth, team lead), `@rayyangits` (Rayyan), `@ckaijing206-rgb` (Lily), `@wintergraham` (Graham), `@all` (everyone). Yuhan, Yiwen and Matt: logins to be added.
 - **Mentions you or `@all`:** act on it and reply promptly.
 - **Not addressed to you:** still read it. Reassess your own work only if it is affected (a topic, a JSON field, a file you own). Do not redo finished work, and do not reply just to acknowledge.
 - Before editing another teammate's files, ask for a handoff on the board and wait for the owner.
@@ -39,10 +39,10 @@ Humans over agents. Only the humans agree changes to the data format or the task
 | Nano firmware (the merged controller) | Steve (`@ShuyiSteve`) | `firmware/nano_controller/`, `firmware/ttgo_t_display/` |
 | Bridge, server, dashboard, message board | Kendrick (`@kendricklow2008`) | `firmware/devkit_bridge/`, `backend/`, `frontend/`, `scripts/`, `tools/` |
 | Team lead; hardware (UART wiring, potentiometer, pump drivers) | Saarth (`@GreyPixelMc`) | no code folders |
-| Heating | Rayyan, Yuhan (logins to be added) | `firmware/heating/` |
-| Stirring | Lily, Yiwen (logins to be added) | `firmware/stirring/` |
-| pH | Matt, Graham (logins to be added) | `firmware/ph/` |
-| Data Analysis | Graham (login to be added) | `analysis/` |
+| Heating | Rayyan (`@rayyangits`), Yuhan (login to be added) | `firmware/heating/` |
+| Stirring | Lily (`@ckaijing206-rgb`), Yiwen (login to be added) | `firmware/stirring/` |
+| pH | Matt (login to be added), Graham (`@wintergraham`) | `firmware/ph/` |
+| Data Analysis | Graham (`@wintergraham`) | `analysis/` |
 | Single-board HTTP fallback | unassigned, ask on the board | `firmware/esp32_bioreactor/` |
 
 Subsystem code is developed and bench-tested in its own folder, then merged into `firmware/nano_controller/` by Steve in Week 8. Pins (shared map): A0 thermistor, A1 pH, A2 potentiometer, D2 Hall sensor, D3 heater, D4 acid pump, D5 alkali pump, D6 stirrer, D7/D8 LilyGO UART.
