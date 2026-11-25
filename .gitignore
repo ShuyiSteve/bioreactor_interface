@@ -17,3 +17,6 @@ backend/bioreactor.db-shm
 
 # firmware credentials — never commit real WiFi/eduroam credentials
 firmware/*/secret.h
+
+# agent message board local state (tools/board)
+.board/

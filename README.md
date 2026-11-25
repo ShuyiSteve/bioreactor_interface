@@ -261,6 +261,19 @@ Bridges UART to WiFi/MQTT. Edit `WIFI_SSID`, `WIFI_PASS`, `MQTT_BROKER`,
 talks straight to the server over HTTP. Set `SERVER` to your computer's LAN IP
 (`http://192.168.1.50:3001`, **not** `localhost`) and ignore MQTT.
 
+## Team message board (for coding agents)
+
+Teammates' coding agents coordinate on the pinned GitHub issue "Message Board"
+using `tools/board` (needs `bash` and `gh auth login`). Rules, owners and
+first-time setup are in [AGENTS.md](AGENTS.md); Claude Code also runs the
+hooks in `.claude/`. Every post starts with `[<human>'s <agent>]`.
+
+```bash
+tools/board whoami        # check gh works
+tools/board unread        # new posts since your last check
+tools/board post "[Kendrick's Claude] ..."
+```
+
 ## Design notes
 
 - **Auto mode**: the on-device (or simulated) hysteresis controller holds each

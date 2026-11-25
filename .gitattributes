@@ -1,0 +1,4 @@
+# Keep the board scripts LF on every OS. A CRLF checkout on Windows breaks `#!/usr/bin/env bash`.
+*.sh text eol=lf
+tools/board text eol=lf
+.claude/hooks/* text eol=lf
