@@ -104,8 +104,11 @@ void IRAM_ATTR rpmISR() { pulseCount++; }
 // ---------------------------------------------------------------- sensors
 float readTemperatureC() {
   int raw = analogRead(PIN_TEMP_ADC);
-  if (raw <= 1) raw = 1;
-  float r = R_REF * ((4095.0f / raw) - 1.0f);
+  if (raw <= 0) raw = 1;          // avoid division by zero at the low end
+  if (raw >= 4095) raw = 4094;    // avoid division by zero at the high end
+  // NTC is the BOTTOM leg of the divider (NTC -> GND), with the 10 kOhm
+  // reference resistor on top (VCC):  Vout = Vcc * R_ntc / (R_ntc + R_ref)
+  float r = R_REF * (float)raw / (4095.0f - (float)raw);
   float tempK = 1.0f / ((1.0f / T_NOM) + logf(r / R_NOM) / B_COEF);
   return tempK - 273.15f;
 }
