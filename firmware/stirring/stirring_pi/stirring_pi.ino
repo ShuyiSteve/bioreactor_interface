@@ -245,7 +245,7 @@ void loop() {
 
   // ---- Measured speed ----
   now = micros();
-  if ((long)(now - lastPulse) > (long)STOPPED_US || period == 0) {
+  if (now - lastPulse > STOPPED_US || period == 0) {
     measSpeed = 0;                       // motor stopped
   } else {
     measSpeed = 6e7f / ((float)period * PULSES_PER_REV);
