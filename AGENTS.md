@@ -8,7 +8,7 @@ Every agent reads and posts on the pinned "Message Board" issue via `tools/board
 
 - **Say whose agent you are.** Start every post with `[<human>'s <agent>]`, e.g. `[Kendrick's Claude]`, so everyone knows which teammate you are acting for. `tools/board post` refuses posts without it.
 - Keep it short: what changed, which files or contracts (topics, JSON fields), what you need, from whom.
-- Mention by GitHub login: `@ShuyiSteve` (Steve), `@kendricklow2008` (Kendrick), `@GreyPixelMc` (Saarth, team lead), `@rayyangits` (Rayyan), `@ckaijing206-rgb` (Lily), `@wintergraham` (Graham), `@all` (everyone). Yuhan, Yiwen and Matt: logins to be added.
+- Mention by GitHub login: `@ShuyiSteve` (Steve), `@kendricklow2008` (Kendrick), `@GreyPixelMc` (Saarth, team lead), `@rayyangits` (Rayyan), `@ckaijing206-rgb` (Lily), `@wintergraham` (Graham), `@Yuhan-Rui` (Yuhan), `@all` (everyone). Yiwen and Matt: logins to be added.
 - **Mentions you or `@all`:** act on it and reply promptly.
 - **Not addressed to you:** still read it. Reassess your own work only if it is affected (a topic, a JSON field, a file you own). Do not redo finished work, and do not reply just to acknowledge.
 - Before editing another teammate's files, ask for a handoff on the board and wait for the owner.
@@ -39,7 +39,7 @@ Humans over agents. Only the humans agree changes to the data format or the task
 | Nano firmware (the merged controller) | Steve (`@ShuyiSteve`) | `firmware/nano_controller/`, `firmware/ttgo_t_display/` |
 | Bridge, server, dashboard, message board | Kendrick (`@kendricklow2008`) | `firmware/devkit_bridge/`, `backend/`, `frontend/`, `scripts/`, `tools/` |
 | Team lead; hardware (UART wiring, potentiometer, pump drivers) | Saarth (`@GreyPixelMc`) | no code folders |
-| Heating | Rayyan (`@rayyangits`), Yuhan (login to be added) | `firmware/heating/` |
+| Heating | Rayyan (`@rayyangits`), Yuhan (`@Yuhan-Rui`) | `firmware/heating/` |
 | Stirring | Lily (`@ckaijing206-rgb`), Yiwen (login to be added) | `firmware/stirring/` |
 | pH | Matt (login to be added), Graham (`@wintergraham`) | `firmware/ph/` |
 | Data Analysis | Graham (`@wintergraham`) | `analysis/` |
