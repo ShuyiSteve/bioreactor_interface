@@ -11,9 +11,9 @@
  *   2. Telemetry uses the course JSON shape, sent every 1 s:
  *        { device, seq, window{start,end,seconds,samples},
  *          temperature_C/pH/rpm -> {mean,min,max},   // ~10 readings averaged
- *          actuators_avg -> {heater_pwm, motor_pwm, acid_pwm, base_pwm},  // 0..1
- *          setpoints -> {temperature_C, pH, rpm}, mode, sp_source, alarms[] }
- *      The DevKitC adds the unix timestamps (NTP).
+ *          actuators_avg -> {heater_pwm, motor_pwm, acid_pwm, base_pwm},  //
+ * 0..1 setpoints -> {temperature_C, pH, rpm}, mode, sp_source, alarms[] } The
+ * DevKitC adds the unix timestamps (NTP).
  *   3. Commands carry an id, use temperature_C (not temp), and the Nano
  *      range-checks every setpoint (25-35 C, 500-1500 RPM, pH 3-7) and replies
  *      on the UART with {id, ok, applied} (the bridge forwards it to MQTT ack).
@@ -32,57 +32,56 @@
 #include <ArduinoJson.h>
 
 // ---------------------------------------------------------------- identity
-const char* DEVICE_ID = "bio1";   // matches MQTT_DEVICE_ID on the server
+const char* DEVICE_ID = "bio1";  // matches MQTT_DEVICE_ID on the server
 
 // ---------------------------------------------------------------- pin map
-const int PIN_TEMP_ADC    = A0;  // thermistor divider (10 k NTC + 10 k series)
-const int PIN_PH_ADC      = A1;  // pH probe conditioning board
-const int PIN_POT_ADC     = A2;  // set-point potentiometer (3.3 V divider; not read yet, waiting on hardware)
-const int PIN_RPM_SENSOR  = 2;   // RPM sensor (Hall effect = 70 pulses/rev)
-const int PIN_HEATER      = 3;   // heater (PWM, 3 Ohm / 30 W)
-const int PIN_PUMP_ACID   = 4;   // acid peristaltic pump
-const int PIN_PUMP_ALKALI = 5;   // alkali (base) peristaltic pump
-const int PIN_STIRRER_PWM = 6;   // stirring motor (PWM)
+const int PIN_TEMP_ADC = A0;    // thermistor divider (10 k NTC + 10 k series)
+const int PIN_PH_ADC = A1;      // pH probe conditioning board
+const int PIN_RPM_SENSOR = 2;   // RPM sensor (Hall effect = 70 pulses/rev)
+const int PIN_HEATER = 3;       // heater (PWM, 3 Ohm / 30 W)
+const int PIN_PUMP_ACID = 4;    // acid peristaltic pump
+const int PIN_PUMP_ALKALI = 5;  // alkali (base) peristaltic pump
+const int PIN_STIRRER_PWM = 6;  // stirring motor (PWM)
 
 // UART + timing.
-const unsigned long UART_BAUD  = 115200;
-const unsigned long SAMPLE_MS  = 100;    // sample sensors at 10 Hz
-const unsigned long WINDOW_MS  = 1000;   // 1 s telemetry window
+const unsigned long UART_BAUD = 115200;
+const unsigned long SAMPLE_MS = 100;   // sample sensors at 10 Hz
+const unsigned long WINDOW_MS = 1000;  // 1 s telemetry window
 
 // Thermistor (10 kOhm NTC, beta model).
-const float R_REF  = 10000.0f;
-const float R_NOM  = 10000.0f;
+const float R_REF = 10000.0f;
+const float R_NOM = 10000.0f;
 const float B_COEF = 3950.0f;
-const float T_NOM  = 298.15f;
+const float T_NOM = 298.15f;
 
 // pH calibration — CALIBRATE WITH BUFFER SOLUTIONS.
-const float PH_SLOPE  = -5.70f;
+const float PH_SLOPE = -5.70f;
 const float PH_OFFSET = 21.34f;
 
 // RPM sensor.
 const float PULSES_PER_REV = 70.0f;  // Hall sensor: 70 pulses/rev (item 5)
 
 // Heater safety cap.
-const float HEATER_MAX = 0.60f;      // 60% max duty
+const float HEATER_MAX = 0.60f;  // 60% max duty
 
 // Stirring PI controller (item 5): tracks RPM instead of open-loop mapping.
-const float KP = 0.0005f;            // duty per RPM of error
-const float KI = 0.0003f;            // duty per (RPM·s) of accumulated error
+const float KP = 0.0005f;  // duty per RPM of error
+const float KI = 0.0003f;  // duty per (RPM·s) of accumulated error
 const float RPM_INTEGRAL_LIMIT = 0.5f / KI;
 float rpmIntegral = 0.0f;
 
 // Control setpoints (overwritten by commands from the dashboard).
 float setpointTemp = 30.0f;
-float setpointPh   = 5.0f;
-float setpointRpm  = 1000.0f;
-String mode        = "auto";
-String spSource    = "default";      // "default" | "dashboard" | "potentiometer"
+float setpointPh = 5.0f;
+float setpointRpm = 1000.0f;
+String mode = "auto";
+String spSource = "default";  // "default" | "dashboard"
 
 // Actuator duties (0..1). Pumps are on/off so their duty is 0 or 1.
 float heaterDuty = 0.0f;
-float motorDuty  = 0.0f;
-float acidDuty   = 0.0f;
-float baseDuty   = 0.0f;
+float motorDuty = 0.0f;
+float acidDuty = 0.0f;
+float baseDuty = 0.0f;
 
 // RPM measurement.
 volatile unsigned long pulseCount = 0;
@@ -93,8 +92,8 @@ float measuredRpm = 0.0f;
 unsigned long windowStart = 0;
 int sampleCount = 0;
 float tempSum = 0, tempMin = 1e9f, tempMax = -1e9f;
-float phSum = 0,   phMin = 1e9f,   phMax = -1e9f;
-float rpmSum = 0,  rpmMin = 1e9f,  rpmMax = -1e9f;
+float phSum = 0, phMin = 1e9f, phMax = -1e9f;
+float rpmSum = 0, rpmMin = 1e9f, rpmMax = -1e9f;
 unsigned long seq = 0;
 
 unsigned long lastSample = 0;
@@ -105,8 +104,8 @@ void IRAM_ATTR rpmISR() { pulseCount++; }
 // ---------------------------------------------------------------- sensors
 float readTemperatureC() {
   int raw = analogRead(PIN_TEMP_ADC);
-  if (raw <= 0) raw = 1;          // avoid division by zero at the low end
-  if (raw >= 4095) raw = 4094;    // avoid division by zero at the high end
+  if (raw <= 0) raw = 1;        // avoid division by zero at the low end
+  if (raw >= 4095) raw = 4094;  // avoid division by zero at the high end
   // NTC is the BOTTOM leg of the divider (NTC -> GND), with the 10 kOhm
   // reference resistor on top (VCC):  Vout = Vcc * R_ntc / (R_ntc + R_ref)
   float r = R_REF * (float)raw / (4095.0f - (float)raw);
@@ -135,10 +134,10 @@ float readRPM() {
 // ledcSetup + ledcAttachPin with a channel number, while core 3.x uses
 // ledcAttach with the pin directly. These wrappers keep the control code
 // identical on both cores.
-static const int LEDC_CH_HEATER  = 0;
+static const int LEDC_CH_HEATER = 0;
 static const int LEDC_CH_STIRRER = 1;
-static const int LEDC_FREQ       = 5000;   // 5 kHz
-static const int LEDC_RES        = 8;      // 8-bit duty
+static const int LEDC_FREQ = 5000;  // 5 kHz
+static const int LEDC_RES = 8;      // 8-bit duty
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 void pwmAttach(int pin, int channel, int freq, int res) {
@@ -161,7 +160,7 @@ void pwmWrite(int pin, int channel, int duty) {
 #endif
 
 void setHeaterDuty(float d) {
-  heaterDuty = constrain(d, 0.0f, HEATER_MAX);   // hard 60% cap
+  heaterDuty = constrain(d, 0.0f, HEATER_MAX);  // hard 60% cap
   pwmWrite(PIN_HEATER, LEDC_CH_HEATER, (int)(heaterDuty * 255.0f));
 }
 
@@ -187,22 +186,32 @@ void updateStirrerPI(float rpm) {
     return;
   }
   float error = setpointRpm - rpm;
-  rpmIntegral += error * (SAMPLE_MS / 1000.0f);              // dt = sample period
-  rpmIntegral = constrain(rpmIntegral, -RPM_INTEGRAL_LIMIT, RPM_INTEGRAL_LIMIT);  // anti-windup
+  rpmIntegral += error * (SAMPLE_MS / 1000.0f);  // dt = sample period
+  rpmIntegral = constrain(rpmIntegral, -RPM_INTEGRAL_LIMIT,
+                          RPM_INTEGRAL_LIMIT);  // anti-windup
   setMotorDuty(KP * error + KI * rpmIntegral);
 }
 
 void controlLoop(float t, float p, float r) {
-  if (mode != "auto") return;   // manual mode: duties come from control commands
+  if (mode != "auto") return;  // manual mode: duties come from control commands
 
   // Heater: hysteresis at the 60% cap (never 100%).
-  if (t < setpointTemp - 0.25f) setHeaterDuty(HEATER_MAX);
-  else if (t > setpointTemp + 0.25f) setHeaterDuty(0.0f);
+  if (t < setpointTemp - 0.25f)
+    setHeaterDuty(HEATER_MAX);
+  else if (t > setpointTemp + 0.25f)
+    setHeaterDuty(0.0f);
 
   // pH: add acid / base.
-  if (p > setpointPh + 0.1f) { setAcidDuty(1.0f); setBaseDuty(0.0f); }
-  else if (p < setpointPh - 0.1f) { setBaseDuty(1.0f); setAcidDuty(0.0f); }
-  else { setAcidDuty(0.0f); setBaseDuty(0.0f); }
+  if (p > setpointPh + 0.1f) {
+    setAcidDuty(1.0f);
+    setBaseDuty(0.0f);
+  } else if (p < setpointPh - 0.1f) {
+    setBaseDuty(1.0f);
+    setAcidDuty(0.0f);
+  } else {
+    setAcidDuty(0.0f);
+    setBaseDuty(0.0f);
+  }
 
   // Stirring: PI control on RPM error (item 5).
   updateStirrerPI(r);
@@ -218,9 +227,15 @@ void resetWindow(unsigned long startMs) {
 }
 
 void accumulate(float t, float p, float r) {
-  tempSum += t; tempMin = min(tempMin, t); tempMax = max(tempMax, t);
-  phSum   += p; phMin   = min(phMin,   p); phMax   = max(phMax,   p);
-  rpmSum  += r; rpmMin  = min(rpmMin,  r); rpmMax  = max(rpmMax,  r);
+  tempSum += t;
+  tempMin = min(tempMin, t);
+  tempMax = max(tempMax, t);
+  phSum += p;
+  phMin = min(phMin, p);
+  phMax = max(phMax, p);
+  rpmSum += r;
+  rpmMin = min(rpmMin, r);
+  rpmMax = max(rpmMax, r);
   sampleCount++;
 }
 
@@ -232,23 +247,29 @@ void sendTelemetry(unsigned long endMs) {
   doc["seq"] = ++seq;
 
   JsonObject win = doc.createNestedObject("window");
-  win["start"] = windowStart;                       // ms since Nano boot (DevKitC stamps unix)
+  win["start"] = windowStart;  // ms since Nano boot (DevKitC stamps unix)
   win["end"] = endMs;
   win["seconds"] = (endMs - windowStart) / 1000.0f;
   win["samples"] = sampleCount;
 
   JsonObject tc = doc.createNestedObject("temperature_C");
-  tc["mean"] = tempSum / n; tc["min"] = tempMin; tc["max"] = tempMax;
+  tc["mean"] = tempSum / n;
+  tc["min"] = tempMin;
+  tc["max"] = tempMax;
   JsonObject pc = doc.createNestedObject("pH");
-  pc["mean"] = phSum / n; pc["min"] = phMin; pc["max"] = phMax;
+  pc["mean"] = phSum / n;
+  pc["min"] = phMin;
+  pc["max"] = phMax;
   JsonObject rc = doc.createNestedObject("rpm");
-  rc["mean"] = rpmSum / n; rc["min"] = rpmMin; rc["max"] = rpmMax;
+  rc["mean"] = rpmSum / n;
+  rc["min"] = rpmMin;
+  rc["max"] = rpmMax;
 
   JsonObject act = doc.createNestedObject("actuators_avg");
   act["heater_pwm"] = heaterDuty;
-  act["motor_pwm"]  = motorDuty;
-  act["acid_pwm"]   = acidDuty;
-  act["base_pwm"]   = baseDuty;
+  act["motor_pwm"] = motorDuty;
+  act["acid_pwm"] = acidDuty;
+  act["base_pwm"] = baseDuty;
 
   JsonObject sp = doc.createNestedObject("setpoints");
   sp["temperature_C"] = setpointTemp;
@@ -257,7 +278,7 @@ void sendTelemetry(unsigned long endMs) {
 
   doc["mode"] = mode;
   doc["sp_source"] = spSource;
-  doc.createNestedArray("alarms");   // empty for now
+  doc.createNestedArray("alarms");  // empty for now
 
   serializeJson(doc, Serial1);
   Serial1.print('\n');
@@ -282,9 +303,9 @@ void sendControlAck(const char* id, bool ok) {
   doc["ok"] = ok;
   JsonObject ap = doc.createNestedObject("applied");
   ap["heater_pwm"] = heaterDuty;
-  ap["motor_pwm"]  = motorDuty;
-  ap["acid_pwm"]   = acidDuty;
-  ap["base_pwm"]   = baseDuty;
+  ap["motor_pwm"] = motorDuty;
+  ap["acid_pwm"] = acidDuty;
+  ap["base_pwm"] = baseDuty;
   serializeJson(doc, Serial1);
   Serial1.print('\n');
 }
@@ -295,31 +316,34 @@ void applyCommand(const JsonDocument& cmd) {
   JsonObjectConst p = cmd["payload"].as<JsonObjectConst>();
 
   if (String(type) == "setpoints") {
-    // Range-check everything first; apply all or nothing. On reject, "applied"
-    // in the ack carries the unchanged set points so the dashboard can resync.
-    float t = p["temperature_C"] | setpointTemp;
-    float ph = p["pH"] | setpointPh;
-    float r = p["rpm"] | setpointRpm;
-    String m = p["mode"] | mode.c_str();
-    bool ok = t >= 25.0f && t <= 35.0f &&
-              ph >= 3.0f && ph <= 7.0f &&
-              r >= 500.0f && r <= 1500.0f &&
-              (m == "auto" || m == "manual");
-    if (ok) {
-      setpointTemp = t;
-      setpointPh = ph;
-      setpointRpm = r;
-      mode = m;
-      spSource = "dashboard";
+    bool ok = true;
+
+    if (p["temperature_C"].is<float>()) {
+      float v = p["temperature_C"].as<float>();
+      ok = ok && (v >= 25.0f && v <= 35.0f);
+      setpointTemp = constrain(v, 25.0f, 35.0f);
     }
+    if (p["pH"].is<float>()) {
+      float v = p["pH"].as<float>();
+      ok = ok && (v >= 3.0f && v <= 7.0f);
+      setpointPh = constrain(v, 3.0f, 7.0f);
+    }
+    if (p["rpm"].is<float>()) {
+      float v = p["rpm"].as<float>();
+      ok = ok && (v >= 500.0f && v <= 1500.0f);
+      setpointRpm = constrain(v, 500.0f, 1500.0f);
+    }
+    if (p["mode"].is<const char*>()) mode = p["mode"].as<const char*>();
+
+    spSource = "dashboard";
     sendSetpointAck(id, ok);
     Serial.printf("[cmd] setpoints %.1f C / pH %.1f / %.0f RPM / %s (ok=%d)\n",
                   setpointTemp, setpointPh, setpointRpm, mode.c_str(), ok);
   } else if (String(type) == "control") {
     if (p["heater_pwm"].is<float>()) setHeaterDuty(p["heater_pwm"].as<float>());
-    if (p["motor_pwm"].is<float>())  setMotorDuty(p["motor_pwm"].as<float>());
-    if (p["acid_pwm"].is<float>())   setAcidDuty(p["acid_pwm"].as<float>());
-    if (p["base_pwm"].is<float>())   setBaseDuty(p["base_pwm"].as<float>());
+    if (p["motor_pwm"].is<float>()) setMotorDuty(p["motor_pwm"].as<float>());
+    if (p["acid_pwm"].is<float>()) setAcidDuty(p["acid_pwm"].as<float>());
+    if (p["base_pwm"].is<float>()) setBaseDuty(p["base_pwm"].as<float>());
     sendControlAck(id, true);
     Serial.println("[cmd] actuator override applied");
   }
@@ -343,8 +367,8 @@ void readCommands() {
 
 // ---------------------------------------------------------------- setup/loop
 void setup() {
-  Serial.begin(115200);        // USB debug
-  Serial1.begin(UART_BAUD);    // UART to DevKitC bridge
+  Serial.begin(115200);      // USB debug
+  Serial1.begin(UART_BAUD);  // UART to DevKitC bridge
 
   pinMode(PIN_TEMP_ADC, INPUT);
   pinMode(PIN_PH_ADC, INPUT);
@@ -356,8 +380,10 @@ void setup() {
   digitalWrite(PIN_PUMP_ACID, LOW);
   digitalWrite(PIN_PUMP_ALKALI, LOW);
 
-  pwmAttach(PIN_HEATER, LEDC_CH_HEATER, LEDC_FREQ, LEDC_RES);        // heater PWM (60% cap applied in setHeaterDuty)
-  pwmAttach(PIN_STIRRER_PWM, LEDC_CH_STIRRER, LEDC_FREQ, LEDC_RES);  // stirrer PWM
+  pwmAttach(PIN_HEATER, LEDC_CH_HEATER, LEDC_FREQ,
+            LEDC_RES);  // heater PWM (60% cap applied in setHeaterDuty)
+  pwmAttach(PIN_STIRRER_PWM, LEDC_CH_STIRRER, LEDC_FREQ,
+            LEDC_RES);  // stirrer PWM
   pwmWrite(PIN_HEATER, LEDC_CH_HEATER, 0);
   pwmWrite(PIN_STIRRER_PWM, LEDC_CH_STIRRER, 0);
 
