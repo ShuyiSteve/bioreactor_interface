@@ -1,0 +1,12 @@
+date,stream,z_on,z_off,precision,recall,f1,tp,fp,fn,tn,file,variant,notes
+2026-11-25,nofaults,3.5,2.5,0.0,0.0,0.0,0,17,0,1095,data/nofaults_20261125_091936.csv,basic/hysteresis,"unseen 10:15-10:34, brief's method"
+2026-11-25,nofaults,12.0,9.0,0.0,0.0,0.0,0,0,0,1112,data/nofaults_20261125_091936.csv,model/hysteresis,"unseen 10:15-10:34, settings frozen before"
+2026-11-25,single_fault,3.5,2.5,0.146,0.994,0.255,159,930,1,22,data/single_fault_20261125_091936.csv,basic/hysteresis,"unseen 10:15-10:34, brief's method"
+2026-11-25,single_fault,12.0,9.0,1.0,1.0,1.0,160,0,0,952,data/single_fault_20261125_091936.csv,model/hysteresis,"unseen 10:15-10:34, settings frozen before"
+2026-11-25,three_faults,3.5,2.5,0.375,0.995,0.545,411,685,2,14,data/three_faults_20261125_091936.csv,basic/hysteresis,"unseen 10:15-10:34, brief's method"
+2026-11-25,three_faults,12.0,9.0,1.0,0.993,0.996,410,0,3,699,data/three_faults_20261125_091936.csv,model/hysteresis,"unseen 10:15-10:34, settings frozen before"
+2026-11-25,variable_setpoints,3.5,2.5,0.375,1.0,0.546,413,688,0,10,data/variable_setpoints_20261125_091936.csv,basic/hysteresis,"unseen 10:15-10:34, brief's method"
+2026-11-25,variable_setpoints,12.0,9.0,0.993,0.995,0.994,411,3,2,695,data/variable_setpoints_20261125_091936.csv,model/hysteresis,"unseen 10:15-10:34, settings frozen before"
+2026-11-25,single_fault,12.0,9.0,1.0,0.933,0.965,708,0,51,3502,data/single_fault_20261125_091936.csv,model/hysteresis,"whole 75 min log, partly tuned on"
+2026-11-25,three_faults,12.0,9.0,1.0,0.996,0.998,1830,0,8,2421,data/three_faults_20261125_091936.csv,model/hysteresis,"whole 75 min log, partly tuned on"
+2026-11-25,variable_setpoints,12.0,9.0,0.998,0.997,0.998,1832,3,5,2423,data/variable_setpoints_20261125_091936.csv,model/hysteresis,"whole 75 min log, partly tuned on"

@@ -1,0 +1,64 @@
+{
+  "basic": {
+    "baseline": {
+      "temp": {
+        "median": -0.0003497865008839085,
+        "mad": 0.009824361709878104
+      },
+      "ph": {
+        "median": -0.007021376189729978,
+        "mad": 0.08420698075870447
+      },
+      "rpm": {
+        "median": 0.02911134433202278,
+        "mad": 3.5102034732992706
+      }
+    },
+    "jump_sd": {
+      "temp": 0.018611060171926645,
+      "ph": 0.04828508250019474
+    },
+    "polarity": {}
+  },
+  "model": {
+    "baseline": {
+      "temp_offset": {
+        "median": 0.0,
+        "mad": 0.009824361709878104
+      },
+      "ph_offset": {
+        "median": 0.0,
+        "mad": 0.08420698075870447
+      },
+      "heater_power": {
+        "median": 0.003599469024978456,
+        "mad": 3.2198517451998126e-05
+      }
+    },
+    "jump_sd": {
+      "temp": 0.018611060171926645,
+      "ph": 0.04828508250019474
+    },
+    "polarity": {
+      "temp": -1,
+      "ph": -1
+    }
+  },
+  "columns": {
+    "features": {
+      "temp": "temperature_C.mean",
+      "ph": "pH.mean",
+      "rpm": "rpm.mean"
+    },
+    "setpoints": {
+      "temp": "setpoints.temperature_C",
+      "ph": "setpoints.pH",
+      "rpm": "setpoints.rpm"
+    },
+    "faults": [
+      "faults.last_active"
+    ]
+  },
+  "trained_on": "data/nofaults_20261125_091936.csv",
+  "n": 4263
+}

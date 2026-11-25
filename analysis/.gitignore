@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+# raw and scored logs stay local
+data/*.csv
+!data/*_compare.csv
+data/*.jsonl
